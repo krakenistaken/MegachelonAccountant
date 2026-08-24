@@ -1,0 +1,1405 @@
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import Modal from '@/components/ui/Modal';
+import EmployeeCalendarModal from '@/components/salaries/EmployeeCalendarModal';
+import { useRealtimeEvents } from '@/hooks/useRealtimeEvents';
+import * as XLSX from 'xlsx';
+
+interface Account {
+  id: number;
+  name: string;
+  balance: number;
+}
+
+interface Employee {
+  id: number;
+  first_name: string;
+  last_name: string;
+  daily_wage: number;
+  phone: string | null;
+  is_active: number;
+  created_at: string;
+  total_days_worked: number;
+  total_earned: number;
+  total_paid: number;
+  balance_due: number;
+}
+
+interface AttendanceRecord {
+  employee_id: number;
+  first_name: string;
+  last_name: string;
+  default_daily_wage: number;
+  is_active: number;
+  attendance_id: number | null;
+  date: string | null;
+  status: 'Geldi' | 'Gelmedi' | null;
+  daily_wage: number;
+  is_paid: number; // 0 or 1
+  paid_amount: number;
+  account_id: number | null;
+  account_name: string | null;
+  transaction_id: number | null;
+  note: string | null;
+}
+
+interface MonthlyEmployeeStat {
+  employee_id: number;
+  first_name: string;
+  last_name: string;
+  default_daily_wage: number;
+  is_active: number;
+  days_attended: number;
+  days_absent: number;
+  total_earned: number;
+  total_paid: number;
+  balance_due: number;
+}
+
+interface MonthlySummaryResponse {
+  month: string;
+  startDate: string;
+  endDate: string;
+  summary: {
+    totalEmployees: number;
+    totalDaysAttended: number;
+    totalEarned: number;
+    totalPaid: number;
+    totalDue: number;
+  };
+  employees: MonthlyEmployeeStat[];
+}
+
+function formatCurrency(amount: number, currency: string = 'TRY') {
+  const symbols: Record<string, string> = { TRY: '₺', USD: '$', EUR: '€' };
+  const symbol = symbols[currency] || currency;
+  return `${symbol}${Math.abs(amount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+export default function SalariesPage() {
+  const [activeTab, setActiveTab] = useState<'attendance' | 'employees' | 'summary'>('attendance');
+
+  // Today's date string
+  const todayStr = new Date().toISOString().split('T')[0];
+  const [selectedDate, setSelectedDate] = useState<string>(todayStr);
+
+  // Accounts list for payment selection
+  const [accounts, setAccounts] = useState<Account[]>([]);
+
+  // Attendance state
+  const [localRecords, setLocalRecords] = useState<AttendanceRecord[]>([]);
+  const [loadingAttendance, setLoadingAttendance] = useState(false);
+  const [savingAttendance, setSavingAttendance] = useState(false);
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState('');
+
+  // Calendar modal state
+  const [calendarEmployee, setCalendarEmployee] = useState<Employee | null>(null);
+
+  // Employees state
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [loadingEmployees, setLoadingEmployees] = useState(false);
+  const [empModalOpen, setEmpModalOpen] = useState(false);
+  const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+  const [empForm, setEmpForm] = useState({
+    first_name: '',
+    last_name: '',
+    daily_wage: '',
+    phone: '',
+  });
+  const [empSubmitting, setEmpSubmitting] = useState(false);
+  const [empError, setEmpError] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+
+  // Monthly summary state
+  const currentMonthStr = new Date().toISOString().slice(0, 7);
+  const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
+  const [monthlyData, setMonthlyData] = useState<MonthlySummaryResponse | null>(null);
+  const [loadingMonthly, setLoadingMonthly] = useState(false);
+
+  // Fetch accounts
+  const fetchAccounts = useCallback(async () => {
+    try {
+      const res = await fetch('/api/accounts');
+      const data = await res.json();
+      setAccounts(data.accounts || []);
+    } catch (err) {
+      console.error('Fetch accounts error:', err);
+    }
+  }, []);
+
+  // Fetch attendance for selected date
+  const fetchAttendance = useCallback(async (date: string) => {
+    setLoadingAttendance(true);
+    try {
+      const res = await fetch(`/api/salaries/attendance?date=${date}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      const formattedRecords = (data.records || []).map((r: AttendanceRecord) => ({
+        ...r,
+        paid_amount:
+          r.paid_amount !== undefined && r.paid_amount !== null
+            ? r.paid_amount
+            : r.is_paid === 1
+            ? r.daily_wage
+            : 0,
+      }));
+      setLocalRecords(formattedRecords);
+    } catch (err) {
+      console.error('Fetch attendance error:', err);
+    } finally {
+      setLoadingAttendance(false);
+    }
+  }, []);
+
+  // Fetch employees
+  const fetchEmployees = useCallback(async () => {
+    setLoadingEmployees(true);
+    try {
+      const res = await fetch('/api/employees');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setEmployees(data.employees || []);
+    } catch (err) {
+      console.error('Fetch employees error:', err);
+    } finally {
+      setLoadingEmployees(false);
+    }
+  }, []);
+
+  // Fetch monthly summary
+  const fetchMonthlySummary = useCallback(async (month: string) => {
+    setLoadingMonthly(true);
+    try {
+      const res = await fetch(`/api/salaries/summary?month=${month}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setMonthlyData(data);
+    } catch (err) {
+      console.error('Fetch monthly summary error:', err);
+    } finally {
+      setLoadingMonthly(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAccounts();
+    fetchEmployees();
+  }, [fetchAccounts, fetchEmployees]);
+
+  useEffect(() => {
+    if (activeTab === 'attendance') {
+      fetchAttendance(selectedDate);
+    } else if (activeTab === 'employees') {
+      fetchEmployees();
+    } else if (activeTab === 'summary') {
+      fetchMonthlySummary(selectedMonth);
+    }
+  }, [activeTab, selectedDate, selectedMonth, fetchAttendance, fetchEmployees, fetchMonthlySummary]);
+
+  // Real-time SSE listener
+  useRealtimeEvents({
+    onAccountUpdated: () => fetchAccounts(),
+    onTransactionCreated: () => {
+      fetchAccounts();
+      if (activeTab === 'summary') fetchMonthlySummary(selectedMonth);
+    },
+    onTransactionDeleted: () => {
+      fetchAccounts();
+      if (activeTab === 'summary') fetchMonthlySummary(selectedMonth);
+    },
+  });
+
+  // Date navigation handlers
+  const handlePrevDay = () => {
+    const d = new Date(selectedDate);
+    d.setDate(d.getDate() - 1);
+    setSelectedDate(d.toISOString().split('T')[0]);
+  };
+
+  const handleNextDay = () => {
+    const d = new Date(selectedDate);
+    d.setDate(d.getDate() + 1);
+    setSelectedDate(d.toISOString().split('T')[0]);
+  };
+
+  const handleToday = () => {
+    setSelectedDate(todayStr);
+  };
+
+  const handleYesterday = () => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    setSelectedDate(d.toISOString().split('T')[0]);
+  };
+
+  // Local record changes
+  const handleStatusChange = (employeeId: number, newStatus: 'Geldi' | 'Gelmedi') => {
+    setLocalRecords((prev) =>
+      prev.map((rec) => {
+        if (rec.employee_id === employeeId) {
+          return {
+            ...rec,
+            status: newStatus,
+            is_paid: newStatus === 'Gelmedi' ? 0 : rec.is_paid,
+            paid_amount: newStatus === 'Gelmedi' ? 0 : rec.paid_amount,
+          };
+        }
+        return rec;
+      })
+    );
+  };
+
+  const handlePaymentModeChange = (
+    employeeId: number,
+    mode: 'full' | 'partial' | 'unpaid'
+  ) => {
+    setLocalRecords((prev) =>
+      prev.map((rec) => {
+        if (rec.employee_id === employeeId) {
+          if (mode === 'full') {
+            return {
+              ...rec,
+              is_paid: 1,
+              paid_amount: rec.daily_wage,
+            };
+          } else if (mode === 'partial') {
+            const defaultPartial =
+              rec.paid_amount > 0 && rec.paid_amount < rec.daily_wage
+                ? rec.paid_amount
+                : Math.round(rec.daily_wage / 2) || 100;
+            return {
+              ...rec,
+              is_paid: 1,
+              paid_amount: defaultPartial,
+            };
+          } else {
+            return {
+              ...rec,
+              is_paid: 0,
+              paid_amount: 0,
+            };
+          }
+        }
+        return rec;
+      })
+    );
+  };
+
+  const handlePaidAmountChange = (employeeId: number, amountStr: string) => {
+    const val = parseFloat(amountStr) || 0;
+    setLocalRecords((prev) =>
+      prev.map((rec) => {
+        if (rec.employee_id === employeeId) {
+          return {
+            ...rec,
+            paid_amount: val,
+            is_paid: val > 0 ? 1 : 0,
+          };
+        }
+        return rec;
+      })
+    );
+  };
+
+  const handleAccountChange = (employeeId: number, accountIdVal: string) => {
+    const accId = accountIdVal ? Number(accountIdVal) : null;
+    const accObj = accounts.find((a) => a.id === accId);
+    setLocalRecords((prev) =>
+      prev.map((rec) => {
+        if (rec.employee_id === employeeId) {
+          return {
+            ...rec,
+            account_id: accId,
+            account_name: accObj ? accObj.name : null,
+          };
+        }
+        return rec;
+      })
+    );
+  };
+
+  const handleWageChange = (employeeId: number, wageStr: string) => {
+    const val = parseFloat(wageStr) || 0;
+    setLocalRecords((prev) =>
+      prev.map((rec) => {
+        if (rec.employee_id === employeeId) {
+          const newPaidAmount =
+            rec.is_paid === 1 && (rec.paid_amount === rec.daily_wage || rec.paid_amount > val)
+              ? val
+              : rec.paid_amount;
+          return {
+            ...rec,
+            daily_wage: val,
+            paid_amount: newPaidAmount,
+          };
+        }
+        return rec;
+      })
+    );
+  };
+
+  const handleNoteChange = (employeeId: number, note: string) => {
+    setLocalRecords((prev) =>
+      prev.map((rec) => {
+        if (rec.employee_id === employeeId) {
+          return {
+            ...rec,
+            note,
+          };
+        }
+        return rec;
+      })
+    );
+  };
+
+  // Bulk actions
+  const handleMarkAllPresent = () => {
+    setLocalRecords((prev) =>
+      prev.map((rec) => ({
+        ...rec,
+        status: 'Geldi',
+      }))
+    );
+  };
+
+  const handleMarkAllPaid = () => {
+    setLocalRecords((prev) =>
+      prev.map((rec) => ({
+        ...rec,
+        is_paid: rec.status === 'Geldi' ? 1 : 0,
+        paid_amount: rec.status === 'Geldi' ? rec.daily_wage : 0,
+      }))
+    );
+  };
+
+  // Save attendance to backend
+  const handleSaveAttendance = async () => {
+    setSavingAttendance(true);
+    setSaveSuccessMessage('');
+    try {
+      const recordsToSave = localRecords.map((r) => ({
+        employee_id: r.employee_id,
+        status: r.status || 'Gelmedi',
+        daily_wage: r.daily_wage,
+        is_paid: r.status === 'Geldi' && (r.paid_amount || 0) > 0,
+        paid_amount: r.status === 'Geldi' ? (r.paid_amount || 0) : 0,
+        account_id: r.account_id,
+        note: r.note,
+      }));
+
+      const res = await fetch('/api/salaries/attendance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: selectedDate,
+          records: recordsToSave,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      setSaveSuccessMessage('Yoklama ve ödeme kayıtları başarıyla kaydedildi.');
+      fetchAttendance(selectedDate);
+      fetchAccounts();
+
+      setTimeout(() => {
+        setSaveSuccessMessage('');
+      }, 3500);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Kaydedilirken hata oluştu.');
+    } finally {
+      setSavingAttendance(false);
+    }
+  };
+
+  // Employee CRUD handlers
+  const openNewEmployeeModal = () => {
+    setEditingEmployee(null);
+    setEmpForm({ first_name: '', last_name: '', daily_wage: '', phone: '' });
+    setEmpError('');
+    setEmpModalOpen(true);
+  };
+
+  const openEditEmployeeModal = (emp: Employee) => {
+    setEditingEmployee(emp);
+    setEmpForm({
+      first_name: emp.first_name,
+      last_name: emp.last_name,
+      daily_wage: String(emp.daily_wage),
+      phone: emp.phone || '',
+    });
+    setEmpError('');
+    setEmpModalOpen(true);
+  };
+
+  const handleEmployeeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setEmpSubmitting(true);
+    setEmpError('');
+
+    try {
+      const url = editingEmployee ? `/api/employees/${editingEmployee.id}` : '/api/employees';
+      const method = editingEmployee ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          first_name: empForm.first_name,
+          last_name: empForm.last_name,
+          daily_wage: parseFloat(empForm.daily_wage) || 0,
+          phone: empForm.phone || null,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'İşlem başarısız.');
+
+      setEmpModalOpen(false);
+      fetchEmployees();
+      if (activeTab === 'attendance') fetchAttendance(selectedDate);
+    } catch (err) {
+      setEmpError(err instanceof Error ? err.message : 'Sunucu hatası.');
+    } finally {
+      setEmpSubmitting(false);
+    }
+  };
+
+  const handleDeleteEmployee = async (id: number) => {
+    try {
+      const res = await fetch(`/api/employees/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error || 'Silinemedi.');
+      } else {
+        fetchEmployees();
+        if (activeTab === 'attendance') fetchAttendance(selectedDate);
+      }
+    } catch (err) {
+      console.error('Delete employee error:', err);
+    } finally {
+      setDeleteConfirm(null);
+    }
+  };
+
+  // Export Monthly Summary to Excel
+  const handleExportMonthlyExcel = () => {
+    if (!monthlyData || monthlyData.employees.length === 0) return;
+
+    const rows = monthlyData.employees.map((e) => ({
+      'Çalışan': `${e.first_name} ${e.last_name}`,
+      'Günlük Yevmiye (₺)': e.default_daily_wage,
+      'Çalıştığı Gün (Geldi)': e.days_attended,
+      'Gelmeyen Gün': e.days_absent,
+      'Toplam Hak Ediş (₺)': e.total_earned,
+      'Ödenen Tutar (₺)': e.total_paid,
+      'Kalan Bakiye / Borç (₺)': e.balance_due,
+      'Durum': e.is_active ? 'Aktif' : 'Pasif',
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    worksheet['!cols'] = [
+      { wch: 25 },
+      { wch: 18 },
+      { wch: 20 },
+      { wch: 15 },
+      { wch: 20 },
+      { wch: 18 },
+      { wch: 22 },
+      { wch: 10 },
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, `Maaş_${monthlyData.month}`);
+
+    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([buffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Megachelon_Maas_Bordrosu_${monthlyData.month}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Export Monthly Summary to CSV
+  const handleExportMonthlyCSV = () => {
+    if (!monthlyData || monthlyData.employees.length === 0) return;
+
+    const headers = [
+      'Çalışan',
+      'Günlük Yevmiye (TL)',
+      'Çalıştığı Gün',
+      'Gelmediği Gün',
+      'Toplam Hak Ediş (TL)',
+      'Ödenen Tutar (TL)',
+      'Kalan Bakiye (TL)',
+      'Durum',
+    ];
+
+    const escapeCSV = (val: string | number) => `"${String(val).replace(/"/g, '""')}"`;
+
+    const lines = [
+      headers.map(escapeCSV).join(';'),
+      ...monthlyData.employees.map((e) =>
+        [
+          escapeCSV(`${e.first_name} ${e.last_name}`),
+          escapeCSV(e.default_daily_wage),
+          escapeCSV(e.days_attended),
+          escapeCSV(e.days_absent),
+          escapeCSV(e.total_earned),
+          escapeCSV(e.total_paid),
+          escapeCSV(e.balance_due),
+          escapeCSV(e.is_active ? 'Aktif' : 'Pasif'),
+        ].join(';')
+      ),
+    ];
+
+    const csvContent = '\uFEFF' + lines.join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Megachelon_Maas_Bordrosu_${monthlyData.month}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Local attendance stats calculation
+  const currentPresentCount = localRecords.filter((r) => r.status === 'Geldi').length;
+  const currentAbsentCount = localRecords.filter((r) => r.status === 'Gelmedi').length;
+  const currentTotalWage = localRecords
+    .filter((r) => r.status === 'Geldi')
+    .reduce((sum, r) => sum + r.daily_wage, 0);
+  const currentPaidAmount = localRecords
+    .filter((r) => r.status === 'Geldi')
+    .reduce((sum, r) => sum + (r.paid_amount || 0), 0);
+  const currentUnpaidAmount = currentTotalWage - currentPaidAmount;
+
+  return (
+    <div className="space-y-6">
+      {/* Top Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Maaş & Yoklama Takibi</h1>
+          <p className="text-gray-500 mt-1 text-sm">
+            Personel günlük yevmiye yoklaması, hakediş ve kasa ödeme yönetimi
+          </p>
+        </div>
+
+        {/* Action Button depending on tab */}
+        {activeTab === 'employees' && (
+          <button
+            onClick={openNewEmployeeModal}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white
+              bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700
+              shadow-md shadow-primary-500/25 transition-all"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            Yeni Çalışan Ekle
+          </button>
+        )}
+
+        {activeTab === 'attendance' && (
+          <button
+            onClick={handleSaveAttendance}
+            disabled={savingAttendance || localRecords.length === 0}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white
+              bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700
+              shadow-md shadow-emerald-500/25 transition-all disabled:opacity-50"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+            </svg>
+            {savingAttendance ? 'Kaydediliyor...' : 'Yoklamayı Kaydet'}
+          </button>
+        )}
+      </div>
+
+      {/* Main Tab Navigation */}
+      <div className="flex items-center gap-2 border-b border-gray-200">
+        <button
+          onClick={() => setActiveTab('attendance')}
+          className={`pb-3 px-3 text-sm font-bold border-b-2 transition-all duration-200 ${
+            activeTab === 'attendance'
+              ? 'border-primary-600 text-primary-600'
+              : 'border-transparent text-gray-500 hover:text-gray-900'
+          }`}
+        >
+          📅 Günlük Yoklama
+        </button>
+        <button
+          onClick={() => setActiveTab('employees')}
+          className={`pb-3 px-3 text-sm font-bold border-b-2 transition-all duration-200 ${
+            activeTab === 'employees'
+              ? 'border-primary-600 text-primary-600'
+              : 'border-transparent text-gray-500 hover:text-gray-900'
+          }`}
+        >
+          👥 Personel Listesi ({employees.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('summary')}
+          className={`pb-3 px-3 text-sm font-bold border-b-2 transition-all duration-200 ${
+            activeTab === 'summary'
+              ? 'border-primary-600 text-primary-600'
+              : 'border-transparent text-gray-500 hover:text-gray-900'
+          }`}
+        >
+          📊 Aylık Hakediş & Bordro
+        </button>
+      </div>
+
+      {/* TAB 1: GÜNLÜK YOKLAMA */}
+      {activeTab === 'attendance' && (
+        <div className="space-y-6 animate-in fade-in duration-200">
+          {/* Success Banner */}
+          {saveSuccessMessage && (
+            <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-semibold flex items-center gap-2">
+              <svg className="w-5 h-5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+              </svg>
+              {saveSuccessMessage}
+            </div>
+          )}
+
+          {/* Date Selector and Bulk Actions Bar */}
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+            {/* Date Pickers */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={handlePrevDay}
+                className="p-2 rounded-xl border border-gray-200 hover:bg-gray-50 text-gray-600 transition-colors"
+                title="Önceki Gün"
+              >
+                ◀
+              </button>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="px-3.5 py-2 rounded-xl border border-gray-200 font-bold text-sm text-gray-900 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+              />
+              <button
+                onClick={handleNextDay}
+                className="p-2 rounded-xl border border-gray-200 hover:bg-gray-50 text-gray-600 transition-colors"
+                title="Sonraki Gün"
+              >
+                ▶
+              </button>
+
+              <button
+                onClick={handleToday}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                  selectedDate === todayStr
+                    ? 'bg-primary-500 text-white shadow-sm'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Bugün
+              </button>
+              <button
+                onClick={handleYesterday}
+                className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200"
+              >
+                Dün
+              </button>
+            </div>
+
+            {/* Quick Bulk Actions */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={handleMarkAllPresent}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition-colors"
+              >
+                ✓ Tümünü Geldi Yap
+              </button>
+              <button
+                onClick={handleMarkAllPaid}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-primary-700 bg-primary-50 hover:bg-primary-100 border border-primary-200 transition-colors"
+              >
+                ₺ Tümünü Ödendi Yap
+              </button>
+            </div>
+          </div>
+
+          {/* Daily Quick Summary Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div className="bg-white rounded-xl border border-gray-100 p-3.5 text-center">
+              <p className="text-xs font-medium text-gray-500">Kayıtlı Çalışan</p>
+              <p className="text-xl font-bold text-gray-900 mt-1">{localRecords.length}</p>
+            </div>
+            <div className="bg-emerald-50 rounded-xl border border-emerald-100 p-3.5 text-center">
+              <p className="text-xs font-medium text-emerald-700">Geldi (Katılan)</p>
+              <p className="text-xl font-bold text-emerald-700 mt-1">{currentPresentCount}</p>
+            </div>
+            <div className="bg-rose-50 rounded-xl border border-rose-100 p-3.5 text-center">
+              <p className="text-xs font-medium text-rose-700">Gelmedi</p>
+              <p className="text-xl font-bold text-rose-700 mt-1">{currentAbsentCount}</p>
+            </div>
+            <div className="bg-gray-50 rounded-xl border border-gray-100 p-3.5 text-center">
+              <p className="text-xs font-medium text-gray-500">Günlük Hak Ediş</p>
+              <p className="text-lg font-bold text-gray-900 mt-1">{formatCurrency(currentTotalWage)}</p>
+            </div>
+            <div className="bg-emerald-50/70 rounded-xl border border-emerald-100 p-3.5 text-center">
+              <p className="text-xs font-medium text-emerald-700">Ödenen</p>
+              <p className="text-lg font-bold text-emerald-700 mt-1">{formatCurrency(currentPaidAmount)}</p>
+            </div>
+            <div className="bg-amber-50 rounded-xl border border-amber-100 p-3.5 text-center">
+              <p className="text-xs font-medium text-amber-700">Bekleyen (Ödenmeyen)</p>
+              <p className="text-lg font-bold text-amber-700 mt-1">{formatCurrency(currentUnpaidAmount)}</p>
+            </div>
+          </div>
+
+          {/* Attendance Table */}
+          {loadingAttendance ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="w-8 h-8 border-3 border-primary-200 border-t-primary-600 rounded-full animate-spin" />
+            </div>
+          ) : localRecords.length === 0 ? (
+            <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-gray-200">
+              <div className="w-12 h-12 mx-auto rounded-full bg-gray-100 flex items-center justify-center mb-3 text-gray-400">
+                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
+                </svg>
+              </div>
+              <p className="text-sm font-bold text-gray-700">Kayıtlı Çalışan Bulunamadı</p>
+              <p className="text-xs text-gray-400 mt-1 mb-4">
+                Yoklama alabilmek için önce Personel Listesi sekmesinden çalışan ekleyin.
+              </p>
+              <button
+                onClick={openNewEmployeeModal}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-primary-600 hover:bg-primary-700"
+              >
+                Yeni Çalışan Ekle
+              </button>
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-gray-50/80 border-b border-gray-100 text-gray-500 font-bold uppercase text-left">
+                      <th className="px-5 py-3.5">Çalışan</th>
+                      <th className="px-4 py-3.5">Yevmiye (₺)</th>
+                      <th className="px-4 py-3.5 text-center">Yoklama Durumu</th>
+                      <th className="px-4 py-3.5 text-center">Ödeme Durumu</th>
+                      <th className="px-4 py-3.5">Kasa Seçimi</th>
+                      <th className="px-4 py-3.5">Açıklama / Not</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50 font-medium">
+                    {localRecords.map((rec) => {
+                      const isPresent = rec.status === 'Geldi';
+                      const currentPaid = rec.paid_amount !== undefined ? rec.paid_amount : (rec.is_paid === 1 ? rec.daily_wage : 0);
+                      const isFullPaid = isPresent && rec.is_paid === 1 && currentPaid >= rec.daily_wage;
+                      const isPartialPaid = isPresent && rec.is_paid === 1 && currentPaid > 0 && currentPaid < rec.daily_wage;
+                      const isUnpaid = isPresent && (!rec.is_paid || currentPaid === 0);
+
+                      return (
+                        <tr
+                          key={rec.employee_id}
+                          className={`transition-colors ${
+                            isPresent ? 'bg-white hover:bg-emerald-50/20' : 'bg-gray-50/40 hover:bg-gray-50'
+                          }`}
+                        >
+                          {/* Employee Name */}
+                          <td className="px-5 py-4">
+                            <div
+                              onClick={() => {
+                                const emp = employees.find((e) => e.id === rec.employee_id);
+                                if (emp) setCalendarEmployee(emp);
+                              }}
+                              className="flex items-center gap-3 cursor-pointer group"
+                              title="Yoklama Takvimini Gör"
+                            >
+                              <div className="w-8 h-8 rounded-full bg-primary-100 text-primary-700 font-bold flex items-center justify-center text-xs group-hover:bg-primary-600 group-hover:text-white transition-colors">
+                                {rec.first_name.charAt(0)}
+                                {rec.last_name.charAt(0)}
+                              </div>
+                              <div>
+                                <p className="font-bold text-gray-900 text-sm group-hover:text-primary-600 transition-colors flex items-center gap-1.5">
+                                  {rec.first_name} {rec.last_name}
+                                  <span className="text-gray-400 group-hover:text-primary-500 text-xs">📅</span>
+                                </p>
+                                <p className="text-[11px] text-gray-400">
+                                  Varsayılan: {formatCurrency(rec.default_daily_wage)}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Daily wage input */}
+                          <td className="px-4 py-4">
+                            <div className="flex items-center gap-1">
+                              <span className="text-gray-400 font-semibold">₺</span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="10"
+                                value={rec.daily_wage}
+                                onChange={(e) => handleWageChange(rec.employee_id, e.target.value)}
+                                className="w-24 px-2.5 py-1.5 rounded-lg border border-gray-200 font-bold text-gray-900 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                              />
+                            </div>
+                          </td>
+
+                          {/* Attendance Status Toggle Buttons */}
+                          <td className="px-4 py-4 text-center">
+                            <div className="inline-flex rounded-xl p-1 bg-gray-100 border border-gray-200 gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange(rec.employee_id, 'Geldi')}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                  isPresent
+                                    ? 'bg-emerald-500 text-white shadow-sm'
+                                    : 'text-gray-500 hover:text-gray-800'
+                                }`}
+                              >
+                                ✓ Geldi
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange(rec.employee_id, 'Gelmedi')}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                  rec.status === 'Gelmedi'
+                                    ? 'bg-rose-500 text-white shadow-sm'
+                                    : 'text-gray-500 hover:text-gray-800'
+                                }`}
+                              >
+                                ✗ Gelmedi
+                              </button>
+                            </div>
+                          </td>
+
+                          {/* Payment Status Toggle */}
+                          <td className="px-4 py-4 text-center">
+                            {isPresent ? (
+                              <div className="flex flex-col items-center gap-1.5">
+                                <div className="inline-flex rounded-xl p-1 bg-gray-100 border border-gray-200 gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handlePaymentModeChange(rec.employee_id, 'full')}
+                                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                      isFullPaid
+                                        ? 'bg-emerald-600 text-white shadow-sm'
+                                        : 'text-gray-500 hover:text-gray-800'
+                                    }`}
+                                    title="Tüm günlük yevmiyeyi ödendi yap"
+                                  >
+                                    ✓ Tam Ödendi
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handlePaymentModeChange(rec.employee_id, 'partial')}
+                                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                      isPartialPaid
+                                        ? 'bg-blue-600 text-white shadow-sm'
+                                        : 'text-gray-500 hover:text-gray-800'
+                                    }`}
+                                    title="Maaşın bir kısmını ödendi olarak gir"
+                                  >
+                                    ⚡ Kısmi Ödendi
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handlePaymentModeChange(rec.employee_id, 'unpaid')}
+                                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                      isUnpaid
+                                        ? 'bg-amber-500 text-white shadow-sm'
+                                        : 'text-gray-500 hover:text-gray-800'
+                                    }`}
+                                    title="Ödeme yapılmadı olarak işaretle"
+                                  >
+                                    ✗ Ödenmedi
+                                  </button>
+                                </div>
+
+                                {/* Custom Partial Payment Input */}
+                                {isPartialPaid && (
+                                  <div className="flex items-center justify-center gap-1.5 bg-blue-50/90 px-3 py-1.5 rounded-xl border border-blue-200 animate-in fade-in duration-150">
+                                    <span className="text-[11px] font-bold text-blue-900">Ödenen:</span>
+                                    <div className="flex items-center gap-0.5">
+                                      <span className="text-xs text-blue-600 font-bold">₺</span>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        max={rec.daily_wage}
+                                        step="10"
+                                        value={rec.paid_amount ?? 0}
+                                        onChange={(e) =>
+                                          handlePaidAmountChange(rec.employee_id, e.target.value)
+                                        }
+                                        className="w-20 px-2 py-0.5 text-xs font-bold text-gray-900 bg-white border border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 text-center"
+                                      />
+                                    </div>
+                                    <span className="text-[10px] text-amber-800 font-bold">
+                                      (Kalan: {formatCurrency(Math.max(0, rec.daily_wage - (rec.paid_amount || 0)))})
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-gray-400 text-xs italic">— Gelmedi —</span>
+                            )}
+                          </td>
+
+                          {/* Account Selection */}
+                          <td className="px-4 py-4">
+                            {isPresent && (rec.paid_amount || 0) > 0 ? (
+                              <div className="space-y-1">
+                                <select
+                                  value={rec.account_id || ''}
+                                  onChange={(e) => handleAccountChange(rec.employee_id, e.target.value)}
+                                  className="w-full min-w-[170px] px-2.5 py-1.5 rounded-lg border border-gray-200 bg-gray-50 text-gray-900 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                                >
+                                  <option value="">— Kasa Seçilmedi (Harici/Elden) —</option>
+                                  {accounts.map((acc) => (
+                                    <option key={acc.id} value={acc.id}>
+                                      {acc.name} ({formatCurrency(acc.balance)})
+                                    </option>
+                                  ))}
+                                </select>
+                                {rec.account_id && (
+                                  <p className="text-[10px] text-emerald-600 font-semibold">
+                                    ✓ Bu kasadan {formatCurrency(rec.paid_amount || 0)} otomatik düşülecektir
+                                  </p>
+                                )}
+                                {!rec.account_id && (
+                                  <p className="text-[10px] text-gray-400">
+                                    Kasa bakiyesine dokunulmaz (harici/elden)
+                                  </p>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-gray-400 text-xs">—</span>
+                            )}
+                          </td>
+
+                          {/* Note */}
+                          <td className="px-4 py-4">
+                            <input
+                              type="text"
+                              placeholder="Not ekle..."
+                              value={rec.note || ''}
+                              onChange={(e) => handleNoteChange(rec.employee_id, e.target.value)}
+                              className="w-full min-w-[140px] px-2.5 py-1.5 rounded-lg border border-gray-200 bg-gray-50 text-gray-900 text-xs focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Bottom save bar */}
+              <div className="p-4 bg-gray-50/80 border-t border-gray-100 flex items-center justify-between">
+                <p className="text-xs text-gray-500">
+                  Değişiklikleri geçerli kılmak için &quot;Yoklamayı Kaydet&quot; butonuna basınız.
+                </p>
+                <button
+                  onClick={handleSaveAttendance}
+                  disabled={savingAttendance}
+                  className="px-6 py-2.5 rounded-xl text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 shadow-md shadow-emerald-600/25 transition-all disabled:opacity-50"
+                >
+                  {savingAttendance ? 'Kaydediliyor...' : 'Yoklamayı Kaydet'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 2: PERSONEL LİSTESİ */}
+      {activeTab === 'employees' && (
+        <div className="space-y-6 animate-in fade-in duration-200">
+          {loadingEmployees ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="w-8 h-8 border-3 border-primary-200 border-t-primary-600 rounded-full animate-spin" />
+            </div>
+          ) : employees.length === 0 ? (
+            <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-gray-200">
+              <p className="text-sm font-bold text-gray-700">Henüz personel kaydı yok</p>
+              <p className="text-xs text-gray-400 mt-1 mb-4">
+                Yoklama ve maaş takibi yapabilmek için ilk çalışanınızı ekleyin.
+              </p>
+              <button
+                onClick={openNewEmployeeModal}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-primary-600 hover:bg-primary-700"
+              >
+                Yeni Çalışan Ekle
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {employees.map((emp) => (
+                <div
+                  key={emp.id}
+                  className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm hover:border-primary-300 hover:shadow-md transition-all space-y-4"
+                >
+                  <div
+                    onClick={() => setCalendarEmployee(emp)}
+                    className="flex items-start justify-between cursor-pointer group"
+                    title="Yoklama Takvimini Gör"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-primary-100 text-primary-700 font-bold flex items-center justify-center text-sm shadow-sm group-hover:bg-primary-600 group-hover:text-white transition-colors">
+                        {emp.first_name.charAt(0)}
+                        {emp.last_name.charAt(0)}
+                      </div>
+                      <div>
+                        <h3 className="text-base font-bold text-gray-900 group-hover:text-primary-600 transition-colors flex items-center gap-1.5">
+                          {emp.first_name} {emp.last_name}
+                          <span className="text-xs text-primary-500 font-normal">📅</span>
+                        </h3>
+                        <p className="text-xs text-gray-400">{emp.phone || 'Telefon belirtilmedi'}</p>
+                      </div>
+                    </div>
+
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        emp.is_active ? 'bg-success-50 text-success-700' : 'bg-gray-100 text-gray-500'
+                      }`}
+                    >
+                      {emp.is_active ? 'Aktif' : 'Pasif'}
+                    </span>
+                  </div>
+
+                  {/* Wage & Stats (clickable to open calendar) */}
+                  <div
+                    onClick={() => setCalendarEmployee(emp)}
+                    className="grid grid-cols-2 gap-2 bg-gray-50 hover:bg-primary-50/40 p-3 rounded-xl text-xs cursor-pointer transition-colors"
+                    title="Aylık takvim dökümünü aç"
+                  >
+                    <div>
+                      <span className="text-gray-400 text-[11px]">Günlük Yevmiye</span>
+                      <p className="font-bold text-gray-900 text-sm">{formatCurrency(emp.daily_wage)}</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-400 text-[11px]">Toplam Çalışma</span>
+                      <p className="font-bold text-gray-900 text-sm">{emp.total_days_worked} Gün</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-400 text-[11px]">Toplam Hak Ediş</span>
+                      <p className="font-semibold text-gray-800">{formatCurrency(emp.total_earned)}</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-400 text-[11px]">Kalan Alacak</span>
+                      <p className={`font-bold ${emp.balance_due > 0 ? 'text-danger-600' : 'text-success-600'}`}>
+                        {formatCurrency(emp.balance_due)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Card Actions */}
+                  <div className="pt-2 border-t border-gray-100 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => setCalendarEmployee(emp)}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-primary-700 bg-primary-50 hover:bg-primary-100 transition-colors"
+                      >
+                        📅 Takvim Gör
+                      </button>
+                      <button
+                        onClick={() => openEditEmployeeModal(emp)}
+                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-gray-600 hover:bg-gray-100 transition-colors"
+                      >
+                        Düzenle
+                      </button>
+                    </div>
+
+                    {deleteConfirm === emp.id ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => handleDeleteEmployee(emp.id)}
+                          className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-danger-500 text-white"
+                        >
+                          Sil
+                        </button>
+                        <button
+                          onClick={() => setDeleteConfirm(null)}
+                          className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-gray-100 text-gray-600"
+                        >
+                          İptal
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setDeleteConfirm(emp.id)}
+                        className="p-1.5 text-gray-400 hover:text-danger-500 hover:bg-danger-50 rounded-lg transition-colors"
+                        title="Çalışanı Sil"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 3: AYLIK HAKEDİŞ & BORDRO ÖZETİ */}
+      {activeTab === 'summary' && (
+        <div className="space-y-6 animate-in fade-in duration-200">
+          {/* Month Selector & Export Toolbar */}
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <label className="text-xs font-bold text-gray-700">Bordro Ayı:</label>
+              <input
+                type="month"
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                className="px-3.5 py-2 rounded-xl border border-gray-200 font-bold text-sm text-gray-900 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleExportMonthlyExcel}
+                disabled={!monthlyData || monthlyData.employees.length === 0}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition-all disabled:opacity-50"
+              >
+                <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                </svg>
+                Excel İndir (.xlsx)
+              </button>
+
+              <button
+                onClick={handleExportMonthlyCSV}
+                disabled={!monthlyData || monthlyData.employees.length === 0}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-gray-700 bg-gray-50 hover:bg-gray-100 border border-gray-200 transition-all disabled:opacity-50"
+              >
+                <svg className="w-3.5 h-3.5 text-gray-500" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                </svg>
+                CSV İndir (.csv)
+              </button>
+            </div>
+          </div>
+
+          {/* Monthly KPI Stats */}
+          {monthlyData && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
+                <span className="text-xs font-semibold text-gray-500">Toplam Hakediş</span>
+                <p className="text-2xl font-bold text-gray-900 mt-1">
+                  {formatCurrency(monthlyData.summary.totalEarned)}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">
+                  {monthlyData.summary.totalDaysAttended} gün çalışma
+                </p>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
+                <span className="text-xs font-semibold text-emerald-700">Ödenen Maaşlar</span>
+                <p className="text-2xl font-bold text-emerald-600 mt-1">
+                  {formatCurrency(monthlyData.summary.totalPaid)}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">Kasadan / elden tamamlanan</p>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
+                <span className="text-xs font-semibold text-rose-700">Kalan Borç / Bekleyen</span>
+                <p className="text-2xl font-bold text-rose-600 mt-1">
+                  {formatCurrency(monthlyData.summary.totalDue)}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">Personele ödenecek bakiye</p>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
+                <span className="text-xs font-semibold text-primary-700">Aktif Personel</span>
+                <p className="text-2xl font-bold text-primary-600 mt-1">
+                  {monthlyData.summary.totalEmployees} Kişi
+                </p>
+                <p className="text-xs text-gray-400 mt-1">{monthlyData.month} dönemi</p>
+              </div>
+            </div>
+          )}
+
+          {/* Monthly Table */}
+          {loadingMonthly ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="w-8 h-8 border-3 border-primary-200 border-t-primary-600 rounded-full animate-spin" />
+            </div>
+          ) : !monthlyData || monthlyData.employees.length === 0 ? (
+            <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-gray-200 text-xs text-gray-400">
+              Bu ay için kayıt bulunamadı.
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-100 text-gray-500 font-bold uppercase text-left">
+                      <th className="px-5 py-3.5">Çalışan</th>
+                      <th className="px-4 py-3.5 text-right">Günlük Yevmiye</th>
+                      <th className="px-4 py-3.5 text-center">Çalıştığı Gün</th>
+                      <th className="px-4 py-3.5 text-center">Gelmeyen Gün</th>
+                      <th className="px-4 py-3.5 text-right">Toplam Hak Ediş</th>
+                      <th className="px-4 py-3.5 text-right">Ödenen Tutar</th>
+                      <th className="px-4 py-3.5 text-right">Kalan Alacak / Bakiye</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50 font-medium">
+                    {monthlyData.employees.map((emp) => (
+                      <tr key={emp.employee_id} className="hover:bg-gray-50/60 transition-colors">
+                        <td
+                          onClick={() => {
+                            const fullEmp = employees.find((e) => e.id === emp.employee_id);
+                            if (fullEmp) setCalendarEmployee(fullEmp);
+                          }}
+                          className="px-5 py-4 font-bold text-gray-900 cursor-pointer hover:text-primary-600 transition-colors"
+                          title="Yoklama Takvimini Gör"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <span>{emp.first_name} {emp.last_name}</span>
+                            <span className="text-xs text-primary-500">📅</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4 text-right text-gray-600 font-semibold">
+                          {formatCurrency(emp.default_daily_wage)}
+                        </td>
+                        <td className="px-4 py-4 text-center">
+                          <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 font-bold">
+                            {emp.days_attended} Gün
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 text-center text-gray-400">
+                          {emp.days_absent > 0 ? `${emp.days_absent} Gün` : '—'}
+                        </td>
+                        <td className="px-4 py-4 text-right font-bold text-gray-900">
+                          {formatCurrency(emp.total_earned)}
+                        </td>
+                        <td className="px-4 py-4 text-right font-bold text-emerald-600">
+                          {formatCurrency(emp.total_paid)}
+                        </td>
+                        <td className="px-4 py-4 text-right font-extrabold">
+                          <span className={emp.balance_due > 0 ? 'text-rose-600' : 'text-gray-400'}>
+                            {formatCurrency(emp.balance_due)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Employee Add/Edit Modal */}
+      <Modal
+        isOpen={empModalOpen}
+        onClose={() => setEmpModalOpen(false)}
+        title={editingEmployee ? 'Çalışan Bilgilerini Düzenle' : 'Yeni Çalışan Ekle'}
+        size="sm"
+      >
+        <form onSubmit={handleEmployeeSubmit} className="space-y-4">
+          {empError && (
+            <div className="p-3 rounded-xl bg-danger-50 text-danger-700 text-xs font-semibold">
+              {empError}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1.5">İsim *</label>
+            <input
+              type="text"
+              required
+              value={empForm.first_name}
+              onChange={(e) => setEmpForm({ ...empForm, first_name: e.target.value })}
+              placeholder="Örn: Ahmet"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1.5">Soyisim *</label>
+            <input
+              type="text"
+              required
+              value={empForm.last_name}
+              onChange={(e) => setEmpForm({ ...empForm, last_name: e.target.value })}
+              placeholder="Örn: Yılmaz"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1.5">Günlük Yevmiye (₺) *</label>
+            <input
+              type="number"
+              required
+              min="0"
+              step="10"
+              value={empForm.daily_wage}
+              onChange={(e) => setEmpForm({ ...empForm, daily_wage: e.target.value })}
+              placeholder="Örn: 1200"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1.5">Telefon (İsteğe Bağlı)</label>
+            <input
+              type="tel"
+              value={empForm.phone}
+              onChange={(e) => setEmpForm({ ...empForm, phone: e.target.value })}
+              placeholder="Örn: 0555 123 45 67"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-900 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+            />
+          </div>
+
+          <div className="pt-3 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setEmpModalOpen(false)}
+              className="flex-1 py-2.5 rounded-xl text-xs font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200"
+            >
+              İptal
+            </button>
+            <button
+              type="submit"
+              disabled={empSubmitting}
+              className="flex-1 py-2.5 rounded-xl text-xs font-semibold text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+            >
+              {empSubmitting ? 'Kaydediliyor...' : editingEmployee ? 'Güncelle' : 'Ekle'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Employee Attendance Calendar Modal */}
+      {calendarEmployee && (
+        <EmployeeCalendarModal
+          isOpen={!!calendarEmployee}
+          onClose={() => setCalendarEmployee(null)}
+          employee={calendarEmployee}
+          onSelectDateForAttendance={(date) => {
+            setSelectedDate(date);
+            setActiveTab('attendance');
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
