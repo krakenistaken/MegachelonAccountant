@@ -22,7 +22,7 @@ interface CalendarRecord {
   attendance_id: number;
   employee_id: number;
   date: string;
-  status: 'Geldi' | 'Gelmedi';
+  status: 'Geldi' | 'Yarım Gün' | 'Gelmedi';
   daily_wage: number;
   is_paid: number;
   paid_amount?: number;
@@ -118,9 +118,13 @@ export default function EmployeeCalendarModal({
   records.forEach((r) => recordMap.set(r.date, r));
 
   // Monthly stats
-  const presentDays = records.filter((r) => r.status === 'Geldi');
-  const totalEarned = presentDays.reduce((s, r) => s + r.daily_wage, 0);
-  const totalPaid = presentDays.reduce(
+  const workingDays = records.filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün');
+  const fullDays = records.filter((r) => r.status === 'Geldi');
+  const halfDays = records.filter((r) => r.status === 'Yarım Gün');
+  const absentDays = records.filter((r) => r.status === 'Gelmedi');
+
+  const totalEarned = workingDays.reduce((s, r) => s + r.daily_wage, 0);
+  const totalPaid = workingDays.reduce(
     (s, r) =>
       s +
       (r.paid_amount !== undefined
@@ -130,7 +134,7 @@ export default function EmployeeCalendarModal({
         : 0),
     0
   );
-  const fullPaidDays = presentDays.filter((r) => {
+  const fullPaidDays = workingDays.filter((r) => {
     const p =
       r.paid_amount !== undefined
         ? r.paid_amount
@@ -139,7 +143,7 @@ export default function EmployeeCalendarModal({
         : 0;
     return p >= r.daily_wage && p > 0;
   });
-  const partialPaidDays = presentDays.filter((r) => {
+  const partialPaidDays = workingDays.filter((r) => {
     const p =
       r.paid_amount !== undefined
         ? r.paid_amount
@@ -148,7 +152,7 @@ export default function EmployeeCalendarModal({
         : 0;
     return p > 0 && p < r.daily_wage;
   });
-  const unpaidDays = presentDays.filter((r) => {
+  const unpaidDays = workingDays.filter((r) => {
     const p =
       r.paid_amount !== undefined
         ? r.paid_amount
@@ -157,7 +161,6 @@ export default function EmployeeCalendarModal({
         : 0;
     return p === 0;
   });
-  const absentDays = records.filter((r) => r.status === 'Gelmedi');
   const totalDue = totalEarned - totalPaid;
 
   const todayIso = new Date().toISOString().split('T')[0];
@@ -182,7 +185,7 @@ export default function EmployeeCalendarModal({
                 {employee.first_name} {employee.last_name}
               </h3>
               <p className="text-xs text-gray-500 font-medium mt-0.5">
-                Günlük Yevmiye: <span className="font-bold text-gray-800">{formatCurrency(employee.daily_wage)}</span>
+                Günlük Yevmiye: <span className="font-bold text-gray-800">{formatCurrency(employee.daily_wage)}</span> · Yarım Gün: <span className="font-bold text-indigo-700">{formatCurrency(employee.daily_wage / 2)}</span>
               </p>
             </div>
           </div>
@@ -225,39 +228,41 @@ export default function EmployeeCalendarModal({
         </div>
 
         {/* Monthly Mini Summary KPI Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
-          {/* Tam Ödenen (Yeşil) */}
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
+          {/* Tam Gün (Yeşil) */}
           <div className="bg-emerald-50 border border-emerald-200/80 rounded-2xl p-3 text-center">
             <div className="flex items-center justify-center gap-1 text-emerald-800 text-[11px] font-bold mb-0.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              Tam Ödenen
+              Tam Gün
             </div>
-            <p className="text-xl font-extrabold text-emerald-700">{fullPaidDays.length} Gün</p>
-            <p className="text-[10px] font-semibold text-emerald-600 mt-0.5">
-              Tamamlandı
-            </p>
+            <p className="text-lg font-extrabold text-emerald-700">{fullDays.length} Gün</p>
           </div>
 
-          {/* Kısmi Ödenen (Mavi) */}
-          <div className="bg-blue-50 border border-blue-200/80 rounded-2xl p-3 text-center">
-            <div className="flex items-center justify-center gap-1 text-blue-800 text-[11px] font-bold mb-0.5">
-              <span className="w-2 h-2 rounded-full bg-blue-600" />
-              Kısmi Ödenen
+          {/* Yarım Gün (İndigo) */}
+          <div className="bg-indigo-50 border border-indigo-200/80 rounded-2xl p-3 text-center">
+            <div className="flex items-center justify-center gap-1 text-indigo-800 text-[11px] font-bold mb-0.5">
+              <span className="w-2 h-2 rounded-full bg-indigo-600" />
+              Yarım Gün
             </div>
-            <p className="text-xl font-extrabold text-blue-700">{partialPaidDays.length} Gün</p>
-            <p className="text-[10px] font-semibold text-blue-600 mt-0.5">
-              Parçalı
-            </p>
+            <p className="text-lg font-extrabold text-indigo-700">{halfDays.length} Gün</p>
           </div>
 
-          {/* Bekleyen (Sarı) */}
+          {/* Tam Ödenen */}
+          <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-3 text-center">
+            <div className="flex items-center justify-center gap-1 text-emerald-800 text-[11px] font-bold mb-0.5">
+              ✓ Ödenen
+            </div>
+            <p className="text-lg font-extrabold text-emerald-700">{fullPaidDays.length} Gün</p>
+          </div>
+
+          {/* Bekleyen Borç (Sarı) */}
           <div className="bg-amber-50 border border-amber-200/80 rounded-2xl p-3 text-center">
             <div className="flex items-center justify-center gap-1 text-amber-800 text-[11px] font-bold mb-0.5">
               <span className="w-2 h-2 rounded-full bg-amber-500" />
               Bekleyen
             </div>
-            <p className="text-xl font-extrabold text-amber-700">{unpaidDays.length} Gün</p>
-            <p className="text-[10px] font-semibold text-amber-600 mt-0.5">
+            <p className="text-lg font-extrabold text-amber-700">{unpaidDays.length + partialPaidDays.length} Gün</p>
+            <p className="text-[10px] font-semibold text-amber-600 mt-0.5 truncate">
               {formatCurrency(totalDue)}
             </p>
           </div>
@@ -268,19 +273,16 @@ export default function EmployeeCalendarModal({
               <span className="w-2 h-2 rounded-full bg-rose-500" />
               Gelmedi
             </div>
-            <p className="text-xl font-extrabold text-rose-700">{absentDays.length} Gün</p>
-            <p className="text-[10px] font-semibold text-rose-500 mt-0.5">
-              Devamsız
-            </p>
+            <p className="text-lg font-extrabold text-rose-700">{absentDays.length} Gün</p>
           </div>
 
-          {/* Toplam Hak Ediş / Ödenen */}
+          {/* Toplam Ödenen */}
           <div className="bg-primary-50 border border-primary-200/80 rounded-2xl p-3 text-center col-span-2 sm:col-span-1">
-            <p className="text-[11px] font-bold text-primary-800 mb-0.5">Ödenen Tutar</p>
+            <p className="text-[11px] font-bold text-primary-800 mb-0.5">Ödenen</p>
             <p className="text-base font-extrabold text-primary-700">
               {formatCurrency(totalPaid)}
             </p>
-            <p className="text-[10px] text-primary-600 mt-0.5 font-medium">
+            <p className="text-[10px] text-primary-600 mt-0.5 font-medium truncate">
               Hak: {formatCurrency(totalEarned)}
             </p>
           </div>
@@ -326,6 +328,8 @@ export default function EmployeeCalendarModal({
               const isToday = dateIso === todayIso;
 
               const isPresent = record?.status === 'Geldi';
+              const isHalfDay = record?.status === 'Yarım Gün';
+              const isWorking = isPresent || isHalfDay;
               const paidAmt = record
                 ? record.paid_amount !== undefined
                   ? record.paid_amount
@@ -334,9 +338,9 @@ export default function EmployeeCalendarModal({
                   : 0
                 : 0;
 
-              const isFullPaid = isPresent && paidAmt >= (record?.daily_wage || 0) && paidAmt > 0;
-              const isPartialPaid = isPresent && paidAmt > 0 && paidAmt < (record?.daily_wage || 0);
-              const isUnpaid = isPresent && paidAmt === 0;
+              const isFullPaid = isWorking && paidAmt >= (record?.daily_wage || 0) && paidAmt > 0;
+              const isPartialPaid = isWorking && paidAmt > 0 && paidAmt < (record?.daily_wage || 0);
+              const isUnpaid = isWorking && paidAmt === 0;
               const isAbsent = record?.status === 'Gelmedi';
               const hasRecord = !!record;
 
@@ -354,20 +358,26 @@ export default function EmployeeCalendarModal({
                   className={`
                     relative h-16 sm:h-20 p-1.5 rounded-xl border transition-all duration-200 flex flex-col justify-between cursor-pointer group
                     ${
-                      isFullPaid
-                        ? 'bg-emerald-500 text-white border-emerald-600 shadow-sm shadow-emerald-500/20 hover:scale-[1.03] hover:shadow-md'
+                      isHalfDay && isFullPaid
+                        ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm shadow-indigo-600/20 hover:scale-[1.03]'
+                        : isHalfDay && isUnpaid
+                        ? 'bg-indigo-400 text-white border-indigo-500 shadow-sm shadow-indigo-500/20 hover:scale-[1.03]'
+                        : isFullPaid
+                        ? 'bg-emerald-500 text-white border-emerald-600 shadow-sm shadow-emerald-500/20 hover:scale-[1.03]'
                         : isPartialPaid
-                        ? 'bg-blue-600 text-white border-blue-700 shadow-sm shadow-blue-500/20 hover:scale-[1.03] hover:shadow-md'
+                        ? 'bg-blue-600 text-white border-blue-700 shadow-sm shadow-blue-500/20 hover:scale-[1.03]'
                         : isUnpaid
-                        ? 'bg-amber-500 text-white border-amber-600 shadow-sm shadow-amber-500/25 hover:scale-[1.03] hover:shadow-md'
+                        ? 'bg-amber-500 text-white border-amber-600 shadow-sm shadow-amber-500/25 hover:scale-[1.03]'
                         : isAbsent
-                        ? 'bg-rose-500 text-white border-rose-600 shadow-sm shadow-rose-500/20 hover:scale-[1.03] hover:shadow-md'
+                        ? 'bg-rose-500 text-white border-rose-600 shadow-sm shadow-rose-500/20 hover:scale-[1.03]'
                         : 'bg-gray-50/80 border-gray-100 text-gray-700 hover:bg-gray-100/90 hover:border-gray-200'
                     }
                     ${isToday ? 'ring-2 ring-primary-500 ring-offset-1' : ''}
                   `}
                   title={`${dayNum} ${monthTitle} - ${
-                    isFullPaid
+                    isHalfDay
+                      ? `YARIM GÜN (Yevmiye: ₺${record?.daily_wage} - ${isFullPaid ? 'ÖDENDİ' : isPartialPaid ? `Kısmi: ₺${paidAmt}` : 'BEKLİYOR'})`
+                      : isFullPaid
                       ? 'GELDİ (TAM ÖDENDİ)'
                       : isPartialPaid
                       ? `GELDİ (KISMİ ÖDENDİ: ₺${paidAmt})`
@@ -394,7 +404,16 @@ export default function EmployeeCalendarModal({
 
                   {/* Middle / Bottom: Status badge */}
                   <div className="text-center overflow-hidden">
-                    {isFullPaid ? (
+                    {isHalfDay ? (
+                      <div className="space-y-0.5">
+                        <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-md text-[10px] font-black bg-white/25 text-white backdrop-blur-xs">
+                          ½ Yarım
+                        </span>
+                        <div className="hidden sm:block text-[9px] font-bold text-indigo-100 truncate">
+                          ₺{record?.daily_wage} {isFullPaid ? '(Ödendi)' : ''}
+                        </div>
+                      </div>
+                    ) : isFullPaid ? (
                       <div className="space-y-0.5">
                         <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-md text-[10px] sm:text-xs font-black bg-white/20 text-white backdrop-blur-xs">
                           ✓ Geldi
@@ -443,47 +462,30 @@ export default function EmployeeCalendarModal({
                 <span className="text-gray-400">{hoveredDay.date}:</span>
                 <span
                   className={
-                    hoveredDay.record.status === 'Geldi'
-                      ? (hoveredDay.record.paid_amount !== undefined
-                          ? hoveredDay.record.paid_amount
-                          : hoveredDay.record.is_paid === 1
-                          ? hoveredDay.record.daily_wage
-                          : 0) >= hoveredDay.record.daily_wage
+                    hoveredDay.record.status === 'Yarım Gün'
+                      ? 'text-indigo-400'
+                      : hoveredDay.record.status === 'Geldi'
+                      ? (hoveredDay.record.paid_amount || 0) >= hoveredDay.record.daily_wage
                         ? 'text-emerald-400'
-                        : (hoveredDay.record.paid_amount !== undefined
-                            ? hoveredDay.record.paid_amount
-                            : hoveredDay.record.is_paid === 1
-                            ? hoveredDay.record.daily_wage
-                            : 0) > 0
+                        : (hoveredDay.record.paid_amount || 0) > 0
                         ? 'text-blue-400'
                         : 'text-amber-400'
                       : 'text-rose-400'
                   }
                 >
-                  {hoveredDay.record.status === 'Geldi'
-                    ? (hoveredDay.record.paid_amount !== undefined
-                        ? hoveredDay.record.paid_amount
-                        : hoveredDay.record.is_paid === 1
-                        ? hoveredDay.record.daily_wage
-                        : 0) >= hoveredDay.record.daily_wage
+                  {hoveredDay.record.status === 'Yarım Gün'
+                    ? `½ Yarım Gün (Yevmiye: ${formatCurrency(hoveredDay.record.daily_wage)})`
+                    : hoveredDay.record.status === 'Geldi'
+                    ? (hoveredDay.record.paid_amount || 0) >= hoveredDay.record.daily_wage
                       ? '✓ Geldi (Tam Ödendi)'
-                      : (hoveredDay.record.paid_amount !== undefined
-                          ? hoveredDay.record.paid_amount
-                          : hoveredDay.record.is_paid === 1
-                          ? hoveredDay.record.daily_wage
-                          : 0) > 0
+                      : (hoveredDay.record.paid_amount || 0) > 0
                       ? `⚡ Geldi (Kısmi Ödeme: ${formatCurrency(hoveredDay.record.paid_amount || 0)} / Kalan: ${formatCurrency(Math.max(0, hoveredDay.record.daily_wage - (hoveredDay.record.paid_amount || 0)))})`
                       : '⏳ Geldi (Ödenmedi - Bekliyor)'
                     : '✗ Gelmedi (Devamsız)'}
                 </span>
-                {hoveredDay.record.status === 'Geldi' && (
-                  <span className="text-gray-200">
-                    (Yevmiye: {formatCurrency(hoveredDay.record.daily_wage)})
-                  </span>
-                )}
               </div>
 
-              {hoveredDay.record.status === 'Geldi' && (
+              {(hoveredDay.record.status === 'Geldi' || hoveredDay.record.status === 'Yarım Gün') && (
                 <div className="flex items-center gap-2">
                   <span
                     className={`px-2 py-0.5 rounded-md text-[11px] font-bold ${
@@ -514,7 +516,11 @@ export default function EmployeeCalendarModal({
           <div className="flex flex-wrap items-center gap-4 font-semibold">
             <div className="flex items-center gap-1.5">
               <span className="w-3.5 h-3.5 rounded-md bg-emerald-500 shadow-sm" />
-              <span className="text-gray-700">Yeşil: Tam Ödendi</span>
+              <span className="text-gray-700">Yeşil: Tam Gün (Ödendi)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-3.5 h-3.5 rounded-md bg-indigo-600 shadow-sm" />
+              <span className="text-gray-700">İndigo: Yarım Gün</span>
             </div>
             <div className="flex items-center gap-1.5">
               <span className="w-3.5 h-3.5 rounded-md bg-blue-600 shadow-sm" />
@@ -527,10 +533,6 @@ export default function EmployeeCalendarModal({
             <div className="flex items-center gap-1.5">
               <span className="w-3.5 h-3.5 rounded-md bg-rose-500 shadow-sm" />
               <span className="text-gray-700">Kırmızı: Gelmedi</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-3.5 h-3.5 rounded-md bg-gray-200 border border-gray-300" />
-              <span className="text-gray-400">Gri: Yoklama Yok</span>
             </div>
           </div>
 

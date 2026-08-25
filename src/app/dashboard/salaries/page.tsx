@@ -35,7 +35,7 @@ interface AttendanceRecord {
   is_active: number;
   attendance_id: number | null;
   date: string | null;
-  status: 'Geldi' | 'Gelmedi' | null;
+  status: 'Geldi' | 'Yarım Gün' | 'Gelmedi' | null;
   daily_wage: number;
   is_paid: number; // 0 or 1
   paid_amount: number;
@@ -250,15 +250,34 @@ export default function SalariesPage() {
   };
 
   // Local record changes
-  const handleStatusChange = (employeeId: number, newStatus: 'Geldi' | 'Gelmedi') => {
+  const handleStatusChange = (employeeId: number, newStatus: 'Geldi' | 'Yarım Gün' | 'Gelmedi') => {
     setLocalRecords((prev) =>
       prev.map((rec) => {
         if (rec.employee_id === employeeId) {
+          let updatedWage = rec.daily_wage;
+          let updatedPaidAmount = rec.paid_amount;
+          let updatedIsPaid = rec.is_paid;
+
+          if (newStatus === 'Yarım Gün') {
+            // Half daily wage
+            updatedWage = rec.default_daily_wage / 2;
+            if (updatedPaidAmount > updatedWage) {
+              updatedPaidAmount = updatedWage;
+            }
+          } else if (newStatus === 'Geldi') {
+            // Full daily wage
+            updatedWage = rec.default_daily_wage;
+          } else if (newStatus === 'Gelmedi') {
+            updatedPaidAmount = 0;
+            updatedIsPaid = 0;
+          }
+
           return {
             ...rec,
             status: newStatus,
-            is_paid: newStatus === 'Gelmedi' ? 0 : rec.is_paid,
-            paid_amount: newStatus === 'Gelmedi' ? 0 : rec.paid_amount,
+            daily_wage: updatedWage,
+            is_paid: updatedIsPaid,
+            paid_amount: updatedPaidAmount,
           };
         }
         return rec;
@@ -375,6 +394,7 @@ export default function SalariesPage() {
       prev.map((rec) => ({
         ...rec,
         status: 'Geldi',
+        daily_wage: rec.default_daily_wage,
       }))
     );
   };
@@ -383,8 +403,8 @@ export default function SalariesPage() {
     setLocalRecords((prev) =>
       prev.map((rec) => ({
         ...rec,
-        is_paid: rec.status === 'Geldi' ? 1 : 0,
-        paid_amount: rec.status === 'Geldi' ? rec.daily_wage : 0,
+        is_paid: rec.status === 'Geldi' || rec.status === 'Yarım Gün' ? 1 : 0,
+        paid_amount: rec.status === 'Geldi' || rec.status === 'Yarım Gün' ? rec.daily_wage : 0,
       }))
     );
   };
@@ -398,8 +418,8 @@ export default function SalariesPage() {
         employee_id: r.employee_id,
         status: r.status || 'Gelmedi',
         daily_wage: r.daily_wage,
-        is_paid: r.status === 'Geldi' && (r.paid_amount || 0) > 0,
-        paid_amount: r.status === 'Geldi' ? (r.paid_amount || 0) : 0,
+        is_paid: (r.status === 'Geldi' || r.status === 'Yarım Gün') && (r.paid_amount || 0) > 0,
+        paid_amount: r.status === 'Geldi' || r.status === 'Yarım Gün' ? (r.paid_amount || 0) : 0,
         account_id: r.account_id,
         note: r.note,
       }));
@@ -573,7 +593,7 @@ export default function SalariesPage() {
     const rows = monthlyData.employees.map((e) => ({
       'Çalışan': `${e.first_name} ${e.last_name}`,
       'Günlük Yevmiye (₺)': e.default_daily_wage,
-      'Çalıştığı Gün (Geldi)': e.days_attended,
+      'Çalıştığı Gün (Geldi / Yarım)': e.days_attended,
       'Gelmeyen Gün': e.days_absent,
       'Toplam Hak Ediş (₺)': e.total_earned,
       'Ödenen Tutar (₺)': e.total_paid,
@@ -658,12 +678,13 @@ export default function SalariesPage() {
 
   // Local attendance stats calculation
   const currentPresentCount = localRecords.filter((r) => r.status === 'Geldi').length;
+  const currentHalfDayCount = localRecords.filter((r) => r.status === 'Yarım Gün').length;
   const currentAbsentCount = localRecords.filter((r) => r.status === 'Gelmedi').length;
   const currentTotalWage = localRecords
-    .filter((r) => r.status === 'Geldi')
+    .filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün')
     .reduce((sum, r) => sum + r.daily_wage, 0);
   const currentPaidAmount = localRecords
-    .filter((r) => r.status === 'Geldi')
+    .filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün')
     .reduce((sum, r) => sum + (r.paid_amount || 0), 0);
   const currentUnpaidAmount = currentTotalWage - currentPaidAmount;
 
@@ -817,14 +838,18 @@ export default function SalariesPage() {
           </div>
 
           {/* Daily Quick Summary Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
             <div className="bg-white rounded-xl border border-gray-100 p-3.5 text-center">
               <p className="text-xs font-medium text-gray-500">Kayıtlı Çalışan</p>
               <p className="text-xl font-bold text-gray-900 mt-1">{localRecords.length}</p>
             </div>
             <div className="bg-emerald-50 rounded-xl border border-emerald-100 p-3.5 text-center">
-              <p className="text-xs font-medium text-emerald-700">Geldi (Katılan)</p>
+              <p className="text-xs font-medium text-emerald-700">Tam Gün</p>
               <p className="text-xl font-bold text-emerald-700 mt-1">{currentPresentCount}</p>
+            </div>
+            <div className="bg-indigo-50 rounded-xl border border-indigo-100 p-3.5 text-center">
+              <p className="text-xs font-medium text-indigo-700">Yarım Gün</p>
+              <p className="text-xl font-bold text-indigo-700 mt-1">{currentHalfDayCount}</p>
             </div>
             <div className="bg-rose-50 rounded-xl border border-rose-100 p-3.5 text-center">
               <p className="text-xs font-medium text-rose-700">Gelmedi</p>
@@ -839,7 +864,7 @@ export default function SalariesPage() {
               <p className="text-lg font-bold text-emerald-700 mt-1">{formatCurrency(currentPaidAmount)}</p>
             </div>
             <div className="bg-amber-50 rounded-xl border border-amber-100 p-3.5 text-center">
-              <p className="text-xs font-medium text-amber-700">Bekleyen (Ödenmeyen)</p>
+              <p className="text-xs font-medium text-amber-700">Bekleyen (Borç)</p>
               <p className="text-lg font-bold text-amber-700 mt-1">{formatCurrency(currentUnpaidAmount)}</p>
             </div>
           </div>
@@ -884,16 +909,22 @@ export default function SalariesPage() {
                   <tbody className="divide-y divide-gray-50 font-medium">
                     {localRecords.map((rec) => {
                       const isPresent = rec.status === 'Geldi';
+                      const isHalfDay = rec.status === 'Yarım Gün';
+                      const isWorkingDay = isPresent || isHalfDay;
                       const currentPaid = rec.paid_amount !== undefined ? rec.paid_amount : (rec.is_paid === 1 ? rec.daily_wage : 0);
-                      const isFullPaid = isPresent && rec.is_paid === 1 && currentPaid >= rec.daily_wage;
-                      const isPartialPaid = isPresent && rec.is_paid === 1 && currentPaid > 0 && currentPaid < rec.daily_wage;
-                      const isUnpaid = isPresent && (!rec.is_paid || currentPaid === 0);
+                      const isFullPaid = isWorkingDay && rec.is_paid === 1 && currentPaid >= rec.daily_wage;
+                      const isPartialPaid = isWorkingDay && rec.is_paid === 1 && currentPaid > 0 && currentPaid < rec.daily_wage;
+                      const isUnpaid = isWorkingDay && (!rec.is_paid || currentPaid === 0);
 
                       return (
                         <tr
                           key={rec.employee_id}
                           className={`transition-colors ${
-                            isPresent ? 'bg-white hover:bg-emerald-50/20' : 'bg-gray-50/40 hover:bg-gray-50'
+                            isPresent
+                              ? 'bg-white hover:bg-emerald-50/20'
+                              : isHalfDay
+                              ? 'bg-indigo-50/30 hover:bg-indigo-50/50'
+                              : 'bg-gray-50/40 hover:bg-gray-50'
                           }`}
                         >
                           {/* Employee Name */}
@@ -906,7 +937,11 @@ export default function SalariesPage() {
                               className="flex items-center gap-3 cursor-pointer group"
                               title="Yoklama Takvimini Gör"
                             >
-                              <div className="w-8 h-8 rounded-full bg-primary-100 text-primary-700 font-bold flex items-center justify-center text-xs group-hover:bg-primary-600 group-hover:text-white transition-colors">
+                              <div className={`w-8 h-8 rounded-full font-bold flex items-center justify-center text-xs transition-colors ${
+                                isHalfDay
+                                  ? 'bg-indigo-100 text-indigo-700 group-hover:bg-indigo-600 group-hover:text-white'
+                                  : 'bg-primary-100 text-primary-700 group-hover:bg-primary-600 group-hover:text-white'
+                              }`}>
                                 {rec.first_name.charAt(0)}
                                 {rec.last_name.charAt(0)}
                               </div>
@@ -916,7 +951,7 @@ export default function SalariesPage() {
                                   <span className="text-gray-400 group-hover:text-primary-500 text-xs">📅</span>
                                 </p>
                                 <p className="text-[11px] text-gray-400">
-                                  Varsayılan: {formatCurrency(rec.default_daily_wage)}
+                                  Varsayılan: {formatCurrency(rec.default_daily_wage)} {isHalfDay ? `(Yarım: ${formatCurrency(rec.default_daily_wage / 2)})` : ''}
                                 </p>
                               </div>
                             </div>
@@ -937,14 +972,14 @@ export default function SalariesPage() {
                             </div>
                           </td>
 
-                          {/* Attendance Status Toggle Buttons */}
+                          {/* Attendance Status Toggle Buttons (Geldi, Yarım Gün, Gelmedi) */}
                           <td className="px-4 py-4 text-center">
                             <div className="inline-flex rounded-xl p-1 bg-gray-100 border border-gray-200 gap-1">
                               <button
                                 type="button"
                                 onClick={() => handleStatusChange(rec.employee_id, 'Geldi')}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                                  isPresent
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                  rec.status === 'Geldi'
                                     ? 'bg-emerald-500 text-white shadow-sm'
                                     : 'text-gray-500 hover:text-gray-800'
                                 }`}
@@ -953,8 +988,20 @@ export default function SalariesPage() {
                               </button>
                               <button
                                 type="button"
+                                onClick={() => handleStatusChange(rec.employee_id, 'Yarım Gün')}
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                  rec.status === 'Yarım Gün'
+                                    ? 'bg-indigo-600 text-white shadow-sm'
+                                    : 'text-gray-500 hover:text-gray-800'
+                                }`}
+                                title="Yarım gün (günlük ücretin yarısı yazılır)"
+                              >
+                                ½ Yarım
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => handleStatusChange(rec.employee_id, 'Gelmedi')}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
                                   rec.status === 'Gelmedi'
                                     ? 'bg-rose-500 text-white shadow-sm'
                                     : 'text-gray-500 hover:text-gray-800'
@@ -967,7 +1014,7 @@ export default function SalariesPage() {
 
                           {/* Payment Status Toggle */}
                           <td className="px-4 py-4 text-center">
-                            {isPresent ? (
+                            {isWorkingDay ? (
                               <div className="flex flex-col items-center gap-1.5">
                                 <div className="inline-flex rounded-xl p-1 bg-gray-100 border border-gray-200 gap-1">
                                   <button
@@ -1039,7 +1086,7 @@ export default function SalariesPage() {
 
                           {/* Account Selection */}
                           <td className="px-4 py-4">
-                            {isPresent && (rec.paid_amount || 0) > 0 ? (
+                            {isWorkingDay && (rec.paid_amount || 0) > 0 ? (
                               <div className="space-y-1">
                                 <select
                                   value={rec.account_id || ''}

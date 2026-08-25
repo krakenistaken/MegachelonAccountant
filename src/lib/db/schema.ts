@@ -70,7 +70,7 @@ export async function initializeDatabase(): Promise<void> {
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         employee_id    INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
         date           TEXT NOT NULL,
-        status         TEXT NOT NULL CHECK(status IN ('Geldi', 'Gelmedi')) DEFAULT 'Geldi',
+        status         TEXT NOT NULL DEFAULT 'Geldi',
         daily_wage     REAL NOT NULL DEFAULT 0,
         is_paid        INTEGER NOT NULL DEFAULT 0,
         paid_amount    REAL NOT NULL DEFAULT 0,

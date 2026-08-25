@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
               COALESCE(paid_amount, CASE WHEN is_paid = 1 THEN daily_wage ELSE 0 END) as paid_amount,
               account_id, transaction_id, note
             FROM attendances
-            WHERE employee_id = ? AND status = 'Geldi' AND (paid_amount < daily_wage OR is_paid = 0)
+            WHERE employee_id = ? AND status IN ('Geldi', 'Yarım Gün') AND (paid_amount < daily_wage OR is_paid = 0)
             ORDER BY date ASC`,
       args: [empId],
     });
@@ -117,7 +117,7 @@ export async function POST(request: NextRequest) {
 
       // If paying through an account, record transaction and update balance
       if (targetAccountId && paymentForDay > 0) {
-        const txDesc = `Maaş / Borç Kapatma (${att.date} günü): ${employee.first_name} ${employee.last_name}${note ? ` - ${note}` : ''}`;
+        const txDesc = `Maaş / Borç Kapatma (${att.date} günü${att.status === 'Yarım Gün' ? ' - Yarım Gün' : ''}): ${employee.first_name} ${employee.last_name}${note ? ` - ${note}` : ''}`;
         const txRes = await db.execute({
           sql: `INSERT INTO transactions (type, category_id, account_id, currency, amount, transaction_date, description, created_by_user_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

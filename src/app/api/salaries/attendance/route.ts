@@ -110,13 +110,14 @@ export async function GET(request: NextRequest) {
     // Calculate daily summary stats
     const totalEmployees = records.length;
     const presentCount = records.filter((r) => r.status === 'Geldi').length;
+    const halfDayCount = records.filter((r) => r.status === 'Yarım Gün').length;
     const absentCount = records.filter((r) => r.status === 'Gelmedi').length;
     const unmarkedCount = records.filter((r) => !r.status).length;
     const totalWage = records
-      .filter((r) => r.status === 'Geldi')
+      .filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün')
       .reduce((sum, r) => sum + Number(r.daily_wage || 0), 0);
     const paidAmount = records
-      .filter((r) => r.status === 'Geldi')
+      .filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün')
       .reduce((sum, r) => sum + Number(r.paid_amount || 0), 0);
     const unpaidAmount = totalWage - paidAmount;
 
@@ -125,6 +126,7 @@ export async function GET(request: NextRequest) {
       summary: {
         totalEmployees,
         presentCount,
+        halfDayCount,
         absentCount,
         unmarkedCount,
         totalWage,
@@ -154,7 +156,7 @@ export async function POST(request: NextRequest) {
       date: string;
       records: Array<{
         employee_id: number;
-        status?: 'Geldi' | 'Gelmedi';
+        status?: 'Geldi' | 'Yarım Gün' | 'Gelmedi';
         daily_wage?: number;
         is_paid?: boolean | number;
         paid_amount?: number;
@@ -189,21 +191,25 @@ export async function POST(request: NextRequest) {
 
       if (!emp) continue;
 
-      const effectiveWage =
+      const defaultWage = Number(emp.daily_wage);
+      const status = item.status === 'Gelmedi' ? 'Gelmedi' : item.status === 'Yarım Gün' ? 'Yarım Gün' : 'Geldi';
+
+      // If status is Yarım Gün, default daily wage is half of normal daily wage unless custom wage specified
+      let effectiveWage =
         item.daily_wage !== undefined && item.daily_wage !== null
           ? Math.max(0, parseFloat(String(item.daily_wage)))
-          : Number(emp.daily_wage);
-
-      const status = item.status === 'Gelmedi' ? 'Gelmedi' : 'Geldi';
+          : status === 'Yarım Gün'
+          ? defaultWage / 2
+          : defaultWage;
 
       // Calculate paid_amount & is_paid
       let paidAmount = 0;
       let isPaid = 0;
 
-      if (status === 'Geldi') {
+      if (status === 'Geldi' || status === 'Yarım Gün') {
         if (item.paid_amount !== undefined && item.paid_amount !== null) {
           paidAmount = Math.max(0, parseFloat(String(item.paid_amount)) || 0);
-          isPaid = paidAmount > 0 ? 1 : 0;
+          isPaid = paidAmount >= effectiveWage && effectiveWage > 0 ? 1 : paidAmount > 0 ? 1 : 0;
         } else if (item.is_paid) {
           paidAmount = effectiveWage;
           isPaid = 1;
@@ -276,8 +282,8 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // If currently Geldi + has paidAmount > 0 + with a chosen account and no active transaction
-      if (status === 'Geldi' && paidAmount > 0 && targetAccountId && !transactionId) {
+      // If active attendance (Geldi or Yarım Gün) + has paidAmount > 0 + with a chosen account and no active transaction
+      if ((status === 'Geldi' || status === 'Yarım Gün') && paidAmount > 0 && targetAccountId && !transactionId) {
         // Verify account exists
         const accRs = await db.execute({
           sql: 'SELECT id FROM accounts WHERE id = ?',
@@ -285,7 +291,8 @@ export async function POST(request: NextRequest) {
         });
         if (accRs.rows.length > 0) {
           const isPartial = paidAmount < effectiveWage;
-          const txDesc = `Maaş / Yevmiye (${isPartial ? `Kısmi: ₺${paidAmount}` : 'Tam Ödeme'}): ${emp.first_name} ${emp.last_name} (${date})`;
+          const statusLabel = status === 'Yarım Gün' ? ' (Yarım Gün)' : '';
+          const txDesc = `Maaş / Yevmiye${statusLabel} (${isPartial ? `Kısmi: ₺${paidAmount}` : 'Tam Ödeme'}): ${emp.first_name} ${emp.last_name} (${date})`;
           const txResult = await db.execute({
             sql: `INSERT INTO transactions (type, category_id, account_id, currency, amount, transaction_date, description, created_by_user_id)
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

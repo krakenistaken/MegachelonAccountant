@@ -25,10 +25,10 @@ export async function GET(request: NextRequest) {
               e.last_name,
               e.daily_wage as default_daily_wage,
               e.is_active,
-              COALESCE(SUM(CASE WHEN a.status = 'Geldi' THEN 1 ELSE 0 END), 0) as days_attended,
+              COALESCE(SUM(CASE WHEN a.status = 'Geldi' THEN 1 WHEN a.status = 'Yarım Gün' THEN 0.5 ELSE 0 END), 0) as days_attended,
               COALESCE(SUM(CASE WHEN a.status = 'Gelmedi' THEN 1 ELSE 0 END), 0) as days_absent,
-              COALESCE(SUM(CASE WHEN a.status = 'Geldi' THEN a.daily_wage ELSE 0 END), 0) as total_earned,
-              COALESCE(SUM(CASE WHEN a.status = 'Geldi' THEN (CASE WHEN a.paid_amount > 0 THEN a.paid_amount WHEN a.is_paid = 1 THEN a.daily_wage ELSE 0 END) ELSE 0 END), 0) as total_paid
+              COALESCE(SUM(CASE WHEN a.status IN ('Geldi', 'Yarım Gün') THEN a.daily_wage ELSE 0 END), 0) as total_earned,
+              COALESCE(SUM(CASE WHEN a.status IN ('Geldi', 'Yarım Gün') THEN (CASE WHEN a.paid_amount > 0 THEN a.paid_amount WHEN a.is_paid = 1 THEN a.daily_wage ELSE 0 END) ELSE 0 END), 0) as total_paid
             FROM employees e
             LEFT JOIN attendances a ON e.id = a.employee_id AND a.date BETWEEN ? AND ?
             WHERE e.is_active = 1 OR a.id IS NOT NULL
@@ -51,6 +51,10 @@ export async function GET(request: NextRequest) {
 
     const employees = employeeSummaries.map((emp) => ({
       ...emp,
+      days_attended: Number(emp.days_attended),
+      days_absent: Number(emp.days_absent),
+      total_earned: Number(emp.total_earned),
+      total_paid: Number(emp.total_paid),
       balance_due: Number(emp.total_earned) - Number(emp.total_paid),
     }));
 
