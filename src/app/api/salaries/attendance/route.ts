@@ -156,7 +156,7 @@ export async function POST(request: NextRequest) {
       date: string;
       records: Array<{
         employee_id: number;
-        status?: 'Geldi' | 'Yarım Gün' | 'Gelmedi';
+        status?: string | null;
         daily_wage?: number;
         is_paid?: boolean | number;
         paid_amount?: number;
@@ -191,10 +191,69 @@ export async function POST(request: NextRequest) {
 
       if (!emp) continue;
 
-      const defaultWage = Number(emp.daily_wage);
-      const status = item.status === 'Gelmedi' ? 'Gelmedi' : item.status === 'Yarım Gün' ? 'Yarım Gün' : 'Geldi';
+      // Check existing attendance record
+      const existingAttRs = await db.execute({
+        sql: 'SELECT * FROM attendances WHERE employee_id = ? AND date = ?',
+        args: [item.employee_id, date],
+      });
+      const existingAttendance = existingAttRs.rows[0] as unknown as
+        | {
+            id: number;
+            status: string;
+            daily_wage: number;
+            is_paid: number;
+            paid_amount?: number;
+            account_id: number | null;
+            transaction_id: number | null;
+          }
+        | undefined;
 
-      // If status is Yarım Gün, default daily wage is half of normal daily wage unless custom wage specified
+      const rawStatus = item.status;
+
+      // CASE 1: If status is empty, null, or 'Boş' -> REMOVE/DELETE attendance record for this day
+      if (!rawStatus || rawStatus === '' || rawStatus === 'Boş') {
+        if (existingAttendance) {
+          // If had transaction, refund account balance and delete transaction
+          if (existingAttendance.transaction_id) {
+            const prevTxRs = await db.execute({
+              sql: 'SELECT id, account_id, amount FROM transactions WHERE id = ?',
+              args: [existingAttendance.transaction_id],
+            });
+            const prevTx = prevTxRs.rows[0] as unknown as
+              | { id: number; account_id: number; amount: number }
+              | undefined;
+
+            if (prevTx) {
+              await db.execute({
+                sql: 'UPDATE attendances SET transaction_id = NULL WHERE id = ?',
+                args: [existingAttendance.id],
+              });
+              await db.execute({
+                sql: 'UPDATE accounts SET balance = balance + ? WHERE id = ?',
+                args: [Number(prevTx.amount), prevTx.account_id],
+              });
+              updatedAccountIds.add(prevTx.account_id);
+              await db.execute({
+                sql: 'DELETE FROM transactions WHERE id = ?',
+                args: [prevTx.id],
+              });
+            }
+          }
+
+          // Delete attendance record
+          await db.execute({
+            sql: 'DELETE FROM attendances WHERE id = ?',
+            args: [existingAttendance.id],
+          });
+        }
+        continue;
+      }
+
+      // CASE 2: Status is Geldi, Yarım Gün, or Gelmedi
+      const defaultWage = Number(emp.daily_wage);
+      const status: 'Geldi' | 'Yarım Gün' | 'Gelmedi' =
+        rawStatus === 'Yarım Gün' ? 'Yarım Gün' : rawStatus === 'Gelmedi' ? 'Gelmedi' : 'Geldi';
+
       let effectiveWage =
         item.daily_wage !== undefined && item.daily_wage !== null
           ? Math.max(0, parseFloat(String(item.daily_wage)))
@@ -218,23 +277,6 @@ export async function POST(request: NextRequest) {
 
       const targetAccountId = paidAmount > 0 && item.account_id ? Number(item.account_id) : null;
       const note = item.note?.trim() || null;
-
-      // Check previous attendance record
-      const existingAttRs = await db.execute({
-        sql: 'SELECT * FROM attendances WHERE employee_id = ? AND date = ?',
-        args: [item.employee_id, date],
-      });
-      const existingAttendance = existingAttRs.rows[0] as unknown as
-        | {
-            id: number;
-            status: string;
-            daily_wage: number;
-            is_paid: number;
-            paid_amount?: number;
-            account_id: number | null;
-            transaction_id: number | null;
-          }
-        | undefined;
 
       let transactionId = existingAttendance?.transaction_id || null;
 

@@ -18,6 +18,12 @@ export interface Employee {
   balance_due: number;
 }
 
+interface Account {
+  id: number;
+  name: string;
+  balance: number;
+}
+
 interface CalendarRecord {
   attendance_id: number;
   employee_id: number;
@@ -35,8 +41,10 @@ interface EmployeeCalendarModalProps {
   isOpen: boolean;
   onClose: () => void;
   employee: Employee | null;
+  accounts?: Account[];
   onSelectDateForAttendance?: (date: string) => void;
   onOpenPayDue?: (employee: Employee) => void;
+  onAttendanceUpdated?: () => void;
 }
 
 function formatCurrency(amount: number, currency: string = 'TRY') {
@@ -56,18 +64,36 @@ export default function EmployeeCalendarModal({
   isOpen,
   onClose,
   employee,
-  onSelectDateForAttendance,
+  accounts = [],
   onOpenPayDue,
+  onAttendanceUpdated,
 }: EmployeeCalendarModalProps) {
   const currentMonthStr = new Date().toISOString().slice(0, 7); // YYYY-MM
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
   const [records, setRecords] = useState<CalendarRecord[]>([]);
   const [loading, setLoading] = useState(false);
-  const [hoveredDay, setHoveredDay] = useState<{
-    date: string;
-    dayNum: number;
-    record?: CalendarRecord;
-  } | null>(null);
+
+  // Selected day for inline editing
+  const [selectedDayDate, setSelectedDayDate] = useState<string | null>(null);
+  const [savingDay, setSavingDay] = useState(false);
+  const [daySuccessMessage, setDaySuccessMessage] = useState('');
+
+  // Inline day edit form state
+  const [dayForm, setDayForm] = useState<{
+    status: 'Geldi' | 'Yarım Gün' | 'Gelmedi' | 'Boş';
+    daily_wage: number;
+    payment_mode: 'full' | 'partial' | 'unpaid';
+    paid_amount: number;
+    account_id: string;
+    note: string;
+  }>({
+    status: 'Boş',
+    daily_wage: 0,
+    payment_mode: 'unpaid',
+    paid_amount: 0,
+    account_id: '',
+    note: '',
+  });
 
   const fetchCalendar = useCallback(async (empId: number, month: string) => {
     setLoading(true);
@@ -85,6 +111,7 @@ export default function EmployeeCalendarModal({
   useEffect(() => {
     if (isOpen && employee) {
       fetchCalendar(employee.id, selectedMonth);
+      setSelectedDayDate(null);
     }
   }, [isOpen, employee, selectedMonth, fetchCalendar]);
 
@@ -96,6 +123,7 @@ export default function EmployeeCalendarModal({
     const prevDate = new Date(y, m - 2, 1);
     const newMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
     setSelectedMonth(newMonth);
+    setSelectedDayDate(null);
   };
 
   const handleNextMonth = () => {
@@ -103,6 +131,7 @@ export default function EmployeeCalendarModal({
     const nextDate = new Date(y, m, 1);
     const newMonth = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}`;
     setSelectedMonth(newMonth);
+    setSelectedDayDate(null);
   };
 
   // Parse Year and Month
@@ -164,6 +193,135 @@ export default function EmployeeCalendarModal({
   const totalDue = totalEarned - totalPaid;
 
   const todayIso = new Date().toISOString().split('T')[0];
+
+  // Open day editor when clicking a day
+  const handleSelectDay = (dateIso: string) => {
+    setSelectedDayDate(dateIso);
+    setDaySuccessMessage('');
+    const rec = recordMap.get(dateIso);
+
+    if (rec) {
+      const isPaidFull = (rec.paid_amount || 0) >= rec.daily_wage && rec.daily_wage > 0;
+      const isPaidPartial = (rec.paid_amount || 0) > 0 && (rec.paid_amount || 0) < rec.daily_wage;
+      setDayForm({
+        status: rec.status,
+        daily_wage: rec.daily_wage,
+        payment_mode: isPaidFull ? 'full' : isPaidPartial ? 'partial' : 'unpaid',
+        paid_amount: rec.paid_amount || 0,
+        account_id: rec.account_id ? String(rec.account_id) : '',
+        note: rec.note || '',
+      });
+    } else {
+      // Default new record for this day
+      setDayForm({
+        status: 'Geldi',
+        daily_wage: employee.daily_wage,
+        payment_mode: 'unpaid',
+        paid_amount: 0,
+        account_id: accounts.length > 0 ? String(accounts[0].id) : '',
+        note: '',
+      });
+    }
+  };
+
+  // Quick 1-click update status for a day directly
+  const handleQuickStatusChange = async (dateIso: string, newStatus: 'Geldi' | 'Yarım Gün' | 'Gelmedi' | 'Boş') => {
+    setSavingDay(true);
+    try {
+      const rec = recordMap.get(dateIso);
+      let wage = employee.daily_wage;
+      if (newStatus === 'Yarım Gün') wage = employee.daily_wage / 2;
+
+      let paidAmt = rec?.paid_amount || 0;
+      if (newStatus === 'Boş' || newStatus === 'Gelmedi') {
+        paidAmt = 0;
+      } else if (newStatus === 'Yarım Gün' && paidAmt > wage) {
+        paidAmt = wage;
+      }
+
+      const res = await fetch('/api/salaries/attendance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: dateIso,
+          records: [
+            {
+              employee_id: employee.id,
+              status: newStatus === 'Boş' ? null : newStatus,
+              daily_wage: wage,
+              paid_amount: paidAmt,
+              account_id: rec?.account_id || null,
+              note: rec?.note || null,
+            },
+          ],
+        }),
+      });
+
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Kaydedilemedi.');
+      }
+
+      await fetchCalendar(employee.id, selectedMonth);
+      if (onAttendanceUpdated) onAttendanceUpdated();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Kaydedilirken hata oluştu.');
+    } finally {
+      setSavingDay(false);
+    }
+  };
+
+  // Save detailed day form
+  const handleSaveDayForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedDayDate) return;
+    setSavingDay(true);
+    setDaySuccessMessage('');
+
+    try {
+      let paidAmt = 0;
+      if (dayForm.status === 'Geldi' || dayForm.status === 'Yarım Gün') {
+        if (dayForm.payment_mode === 'full') {
+          paidAmt = dayForm.daily_wage;
+        } else if (dayForm.payment_mode === 'partial') {
+          paidAmt = dayForm.paid_amount;
+        }
+      }
+
+      const res = await fetch('/api/salaries/attendance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: selectedDayDate,
+          records: [
+            {
+              employee_id: employee.id,
+              status: dayForm.status === 'Boş' ? null : dayForm.status,
+              daily_wage: dayForm.daily_wage,
+              paid_amount: paidAmt,
+              account_id: paidAmt > 0 && dayForm.account_id ? Number(dayForm.account_id) : null,
+              note: dayForm.note || null,
+            },
+          ],
+        }),
+      });
+
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'Güncellenemedi.');
+
+      setDaySuccessMessage('Kayıt başarıyla güncellendi.');
+      await fetchCalendar(employee.id, selectedMonth);
+      if (onAttendanceUpdated) onAttendanceUpdated();
+
+      setTimeout(() => {
+        setDaySuccessMessage('');
+      }, 2500);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Hata oluştu.');
+    } finally {
+      setSavingDay(false);
+    }
+  };
 
   return (
     <Modal
@@ -326,6 +484,7 @@ export default function EmployeeCalendarModal({
               const dateIso = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
               const record = recordMap.get(dateIso);
               const isToday = dateIso === todayIso;
+              const isSelected = selectedDayDate === dateIso;
 
               const isPresent = record?.status === 'Geldi';
               const isHalfDay = record?.status === 'Yarım Gün';
@@ -347,48 +506,34 @@ export default function EmployeeCalendarModal({
               return (
                 <div
                   key={dateIso}
-                  onClick={() => {
-                    if (onSelectDateForAttendance) {
-                      onSelectDateForAttendance(dateIso);
-                      onClose();
-                    }
-                  }}
-                  onMouseEnter={() => setHoveredDay({ date: dateIso, dayNum, record })}
-                  onMouseLeave={() => setHoveredDay(null)}
+                  onClick={() => handleSelectDay(dateIso)}
                   className={`
                     relative h-16 sm:h-20 p-1.5 rounded-xl border transition-all duration-200 flex flex-col justify-between cursor-pointer group
                     ${
+                      isSelected
+                        ? 'ring-3 ring-primary-600 ring-offset-2 scale-[1.03] z-10'
+                        : ''
+                    }
+                    ${
                       isHalfDay && isFullPaid
-                        ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm shadow-indigo-600/20 hover:scale-[1.03]'
+                        ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm shadow-indigo-600/20 hover:scale-[1.02]'
                         : isHalfDay && isUnpaid
-                        ? 'bg-indigo-400 text-white border-indigo-500 shadow-sm shadow-indigo-500/20 hover:scale-[1.03]'
+                        ? 'bg-indigo-500 text-white border-indigo-600 shadow-sm shadow-indigo-500/20 hover:scale-[1.02]'
                         : isFullPaid
-                        ? 'bg-emerald-500 text-white border-emerald-600 shadow-sm shadow-emerald-500/20 hover:scale-[1.03]'
+                        ? 'bg-emerald-500 text-white border-emerald-600 shadow-sm shadow-emerald-500/20 hover:scale-[1.02]'
                         : isPartialPaid
-                        ? 'bg-blue-600 text-white border-blue-700 shadow-sm shadow-blue-500/20 hover:scale-[1.03]'
+                        ? 'bg-blue-600 text-white border-blue-700 shadow-sm shadow-blue-500/20 hover:scale-[1.02]'
                         : isUnpaid
-                        ? 'bg-amber-500 text-white border-amber-600 shadow-sm shadow-amber-500/25 hover:scale-[1.03]'
+                        ? 'bg-amber-500 text-white border-amber-600 shadow-sm shadow-amber-500/25 hover:scale-[1.02]'
                         : isAbsent
-                        ? 'bg-rose-500 text-white border-rose-600 shadow-sm shadow-rose-500/20 hover:scale-[1.03]'
+                        ? 'bg-rose-500 text-white border-rose-600 shadow-sm shadow-rose-500/20 hover:scale-[1.02]'
                         : 'bg-gray-50/80 border-gray-100 text-gray-700 hover:bg-gray-100/90 hover:border-gray-200'
                     }
-                    ${isToday ? 'ring-2 ring-primary-500 ring-offset-1' : ''}
+                    ${isToday ? 'border-2 border-primary-500' : ''}
                   `}
-                  title={`${dayNum} ${monthTitle} - ${
-                    isHalfDay
-                      ? `YARIM GÜN (Yevmiye: ₺${record?.daily_wage} - ${isFullPaid ? 'ÖDENDİ' : isPartialPaid ? `Kısmi: ₺${paidAmt}` : 'BEKLİYOR'})`
-                      : isFullPaid
-                      ? 'GELDİ (TAM ÖDENDİ)'
-                      : isPartialPaid
-                      ? `GELDİ (KISMİ ÖDENDİ: ₺${paidAmt})`
-                      : isUnpaid
-                      ? 'GELDİ (ÖDENMEDİ - BEKLİYOR)'
-                      : isAbsent
-                      ? 'GELMEDİ'
-                      : 'Yoklama Girilmedi'
-                  }`}
+                  title={`${dayNum} ${monthTitle} - Tıklayarak yoklamasını düzenleyin`}
                 >
-                  {/* Top: Day Number & Today indicator */}
+                  {/* Top: Day Number & Indicator */}
                   <div className="flex items-center justify-between">
                     <span
                       className={`text-xs sm:text-sm font-extrabold ${
@@ -445,8 +590,8 @@ export default function EmployeeCalendarModal({
                         ✗ Gelmedi
                       </span>
                     ) : (
-                      <span className="text-[10px] text-gray-300 group-hover:text-gray-500 font-medium">
-                        —
+                      <span className="text-[10px] text-gray-400 group-hover:text-primary-600 font-medium">
+                        + Yoklama Gir
                       </span>
                     )}
                   </div>
@@ -454,69 +599,260 @@ export default function EmployeeCalendarModal({
               );
             })}
           </div>
+        </div>
 
-          {/* Hover detail tooltip bar */}
-          {hoveredDay && hoveredDay.record && (
-            <div className="mt-3 p-3 bg-gray-900/95 text-white rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 animate-in fade-in duration-150">
-              <div className="flex items-center gap-2 font-bold">
-                <span className="text-gray-400">{hoveredDay.date}:</span>
-                <span
-                  className={
-                    hoveredDay.record.status === 'Yarım Gün'
-                      ? 'text-indigo-400'
-                      : hoveredDay.record.status === 'Geldi'
-                      ? (hoveredDay.record.paid_amount || 0) >= hoveredDay.record.daily_wage
-                        ? 'text-emerald-400'
-                        : (hoveredDay.record.paid_amount || 0) > 0
-                        ? 'text-blue-400'
-                        : 'text-amber-400'
-                      : 'text-rose-400'
-                  }
-                >
-                  {hoveredDay.record.status === 'Yarım Gün'
-                    ? `½ Yarım Gün (Yevmiye: ${formatCurrency(hoveredDay.record.daily_wage)})`
-                    : hoveredDay.record.status === 'Geldi'
-                    ? (hoveredDay.record.paid_amount || 0) >= hoveredDay.record.daily_wage
-                      ? '✓ Geldi (Tam Ödendi)'
-                      : (hoveredDay.record.paid_amount || 0) > 0
-                      ? `⚡ Geldi (Kısmi Ödeme: ${formatCurrency(hoveredDay.record.paid_amount || 0)} / Kalan: ${formatCurrency(Math.max(0, hoveredDay.record.daily_wage - (hoveredDay.record.paid_amount || 0)))})`
-                      : '⏳ Geldi (Ödenmedi - Bekliyor)'
-                    : '✗ Gelmedi (Devamsız)'}
+        {/* Selected Day Control Panel (Inline Editor) */}
+        {selectedDayDate && (
+          <div className="p-4 sm:p-5 bg-gradient-to-br from-primary-50/50 via-white to-gray-50 rounded-2xl border-2 border-primary-300 shadow-md animate-in fade-in slide-in-from-bottom-3 duration-200">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-primary-100">
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-1 rounded-lg bg-primary-600 text-white font-black text-xs">
+                  📅 {new Date(selectedDayDate).toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', weekday: 'long' })}
                 </span>
+                <h4 className="font-bold text-gray-900 text-sm">
+                  Günün Yoklama ve Ödeme Bilgisini Düzenle
+                </h4>
               </div>
 
-              {(hoveredDay.record.status === 'Geldi' || hoveredDay.record.status === 'Yarım Gün') && (
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`px-2 py-0.5 rounded-md text-[11px] font-bold ${
-                      (hoveredDay.record.paid_amount || 0) >= hoveredDay.record.daily_wage
-                        ? 'bg-emerald-500/30 text-emerald-300'
-                        : (hoveredDay.record.paid_amount || 0) > 0
-                        ? 'bg-blue-500/30 text-blue-300'
-                        : 'bg-amber-500/30 text-amber-300'
+              <button
+                type="button"
+                onClick={() => setSelectedDayDate(null)}
+                className="text-xs font-semibold text-gray-400 hover:text-gray-700"
+              >
+                ✕ Kapat
+              </button>
+            </div>
+
+            {daySuccessMessage && (
+              <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2">
+                ✓ {daySuccessMessage}
+              </div>
+            )}
+
+            <form onSubmit={handleSaveDayForm} className="space-y-4">
+              {/* Status Selector */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                  Yoklama Durumu:
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDayForm({
+                        ...dayForm,
+                        status: 'Geldi',
+                        daily_wage: employee.daily_wage,
+                        paid_amount: dayForm.payment_mode === 'full' ? employee.daily_wage : dayForm.paid_amount,
+                      });
+                    }}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border ${
+                      dayForm.status === 'Geldi'
+                        ? 'bg-emerald-600 text-white border-emerald-700 shadow-sm'
+                        : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
                     }`}
                   >
-                    {(hoveredDay.record.paid_amount || 0) > 0
-                      ? `Ödenen: ${formatCurrency(hoveredDay.record.paid_amount || 0)} ${hoveredDay.record.account_name ? `(${hoveredDay.record.account_name})` : '(Harici)'}`
-                      : 'Ödeme Bekliyor'}
-                  </span>
-                  {hoveredDay.record.note && (
-                    <span className="text-gray-400 text-[11px] italic">
-                      &quot;{hoveredDay.record.note}&quot;
-                    </span>
+                    ✓ Tam Gün (Geldi)
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const halfWage = employee.daily_wage / 2;
+                      setDayForm({
+                        ...dayForm,
+                        status: 'Yarım Gün',
+                        daily_wage: halfWage,
+                        paid_amount: dayForm.payment_mode === 'full' ? halfWage : Math.min(dayForm.paid_amount, halfWage),
+                      });
+                    }}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border ${
+                      dayForm.status === 'Yarım Gün'
+                        ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm'
+                        : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    ½ Yarım Gün
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDayForm({
+                        ...dayForm,
+                        status: 'Gelmedi',
+                        paid_amount: 0,
+                        payment_mode: 'unpaid',
+                      });
+                    }}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border ${
+                      dayForm.status === 'Gelmedi'
+                        ? 'bg-rose-600 text-white border-rose-700 shadow-sm'
+                        : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    ✗ Gelmedi (Devamsız)
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDayForm({
+                        ...dayForm,
+                        status: 'Boş',
+                        paid_amount: 0,
+                        payment_mode: 'unpaid',
+                      });
+                    }}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border ${
+                      dayForm.status === 'Boş'
+                        ? 'bg-gray-800 text-white border-gray-900 shadow-sm'
+                        : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                    }`}
+                    title="Bu gün için kaydı tamamen sil / boş bırak"
+                  >
+                    🗑️ Yoklama Yok (Boş)
+                  </button>
+                </div>
+              </div>
+
+              {/* Wage, Payment & Account Details if not Boş and not Gelmedi */}
+              {(dayForm.status === 'Geldi' || dayForm.status === 'Yarım Gün') && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 bg-white rounded-xl border border-gray-200">
+                  {/* Daily wage */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                      Günlük Yevmiye Tutarı (₺)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      required
+                      value={dayForm.daily_wage}
+                      onChange={(e) => {
+                        const w = parseFloat(e.target.value) || 0;
+                        setDayForm({
+                          ...dayForm,
+                          daily_wage: w,
+                          paid_amount: dayForm.payment_mode === 'full' ? w : dayForm.paid_amount,
+                        });
+                      }}
+                      className="w-full px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-bold text-gray-900 bg-gray-50"
+                    />
+                  </div>
+
+                  {/* Payment Mode */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                      Ödeme Durumu
+                    </label>
+                    <select
+                      value={dayForm.payment_mode}
+                      onChange={(e) => {
+                        const m = e.target.value as 'full' | 'partial' | 'unpaid';
+                        setDayForm({
+                          ...dayForm,
+                          payment_mode: m,
+                          paid_amount: m === 'full' ? dayForm.daily_wage : m === 'partial' ? Math.round(dayForm.daily_wage / 2) : 0,
+                        });
+                      }}
+                      className="w-full px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-900 bg-gray-50"
+                    >
+                      <option value="unpaid">✗ Ödenmedi (Borç Yaz)</option>
+                      <option value="full">✓ Tam Ödendi ({formatCurrency(dayForm.daily_wage)})</option>
+                      <option value="partial">⚡ Kısmi Ödeme</option>
+                    </select>
+                  </div>
+
+                  {/* Paid amount & Kasa */}
+                  {dayForm.payment_mode !== 'unpaid' ? (
+                    <div>
+                      <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                        Ödenecek Kasa
+                      </label>
+                      <select
+                        value={dayForm.account_id}
+                        onChange={(e) => setDayForm({ ...dayForm, account_id: e.target.value })}
+                        className="w-full px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-900 bg-gray-50"
+                      >
+                        <option value="">— Harici / Elden —</option>
+                        {accounts.map((acc) => (
+                          <option key={acc.id} value={acc.id}>
+                            {acc.name} ({formatCurrency(acc.balance)})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-[11px] font-bold text-gray-400 mb-1">
+                        Personele Kalan Borç
+                      </label>
+                      <div className="px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 font-extrabold text-xs">
+                        +{formatCurrency(dayForm.daily_wage)} (Borç)
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Partial amount custom input */}
+                  {dayForm.payment_mode === 'partial' && (
+                    <div className="col-span-full flex items-center gap-2 p-2 bg-blue-50 rounded-lg border border-blue-200">
+                      <span className="text-xs font-bold text-blue-900">Ödenen Tutar:</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max={dayForm.daily_wage}
+                        step="any"
+                        value={dayForm.paid_amount}
+                        onChange={(e) => setDayForm({ ...dayForm, paid_amount: parseFloat(e.target.value) || 0 })}
+                        className="w-24 px-2 py-1 text-xs font-bold text-gray-900 bg-white border border-blue-300 rounded-lg"
+                      />
+                      <span className="text-xs text-amber-800 font-bold">
+                        (Kalan Borç: {formatCurrency(Math.max(0, dayForm.daily_wage - dayForm.paid_amount))})
+                      </span>
+                    </div>
                   )}
                 </div>
               )}
-            </div>
-          )}
-        </div>
 
-        {/* Legend & Action Notice */}
+              {/* Note and Submit button */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+                <input
+                  type="text"
+                  placeholder="İsteğe bağlı not ekle..."
+                  value={dayForm.note}
+                  onChange={(e) => setDayForm({ ...dayForm, note: e.target.value })}
+                  className="flex-1 px-3 py-2 rounded-xl border border-gray-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                />
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDayDate(null)}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200"
+                  >
+                    İptal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingDay}
+                    className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-primary-600 hover:bg-primary-700 shadow-md shadow-primary-600/25 disabled:opacity-50"
+                  >
+                    {savingDay ? 'Kaydediliyor...' : 'Günü Kaydet'}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Legend & Instructions */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 text-xs border-t border-gray-100">
           <div className="flex flex-wrap items-center gap-4 font-semibold">
             <div className="flex items-center gap-1.5">
               <span className="w-3.5 h-3.5 rounded-md bg-emerald-500 shadow-sm" />
-              <span className="text-gray-700">Yeşil: Tam Gün (Ödendi)</span>
+              <span className="text-gray-700">Yeşil: Tam Gün</span>
             </div>
             <div className="flex items-center gap-1.5">
               <span className="w-3.5 h-3.5 rounded-md bg-indigo-600 shadow-sm" />
@@ -534,10 +870,14 @@ export default function EmployeeCalendarModal({
               <span className="w-3.5 h-3.5 rounded-md bg-rose-500 shadow-sm" />
               <span className="text-gray-700">Kırmızı: Gelmedi</span>
             </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-3.5 h-3.5 rounded-md bg-gray-100 border border-gray-300" />
+              <span className="text-gray-400">Gri: Yoklama Yok (Boş)</span>
+            </div>
           </div>
 
           <p className="text-[11px] text-gray-400 italic">
-            * Takvimdeki bir güne tıklayarak o günün yoklama ekranına gidebilirsiniz.
+            * Takvimdeki herhangi bir güne tıklayarak o günün yoklamasını anında girebilir veya silebilirsiniz.
           </p>
         </div>
       </div>

@@ -151,6 +151,7 @@ export default function SalariesPage() {
       if (!res.ok) throw new Error(data.error);
       const formattedRecords = (data.records || []).map((r: AttendanceRecord) => ({
         ...r,
+        status: (r.status as 'Geldi' | 'Yarım Gün' | 'Gelmedi' | null) || null,
         paid_amount:
           r.paid_amount !== undefined && r.paid_amount !== null
             ? r.paid_amount
@@ -250,31 +251,32 @@ export default function SalariesPage() {
   };
 
   // Local record changes
-  const handleStatusChange = (employeeId: number, newStatus: 'Geldi' | 'Yarım Gün' | 'Gelmedi') => {
+  const handleStatusChange = (employeeId: number, newStatus: 'Geldi' | 'Yarım Gün' | 'Gelmedi' | null) => {
     setLocalRecords((prev) =>
       prev.map((rec) => {
         if (rec.employee_id === employeeId) {
+          // If clicking currently active status, toggle it off (to null / Boş)
+          const targetStatus = rec.status === newStatus ? null : newStatus;
+
           let updatedWage = rec.daily_wage;
           let updatedPaidAmount = rec.paid_amount;
           let updatedIsPaid = rec.is_paid;
 
-          if (newStatus === 'Yarım Gün') {
-            // Half daily wage
+          if (targetStatus === 'Yarım Gün') {
             updatedWage = rec.default_daily_wage / 2;
             if (updatedPaidAmount > updatedWage) {
               updatedPaidAmount = updatedWage;
             }
-          } else if (newStatus === 'Geldi') {
-            // Full daily wage
+          } else if (targetStatus === 'Geldi') {
             updatedWage = rec.default_daily_wage;
-          } else if (newStatus === 'Gelmedi') {
+          } else if (targetStatus === 'Gelmedi' || targetStatus === null) {
             updatedPaidAmount = 0;
             updatedIsPaid = 0;
           }
 
           return {
             ...rec,
-            status: newStatus,
+            status: targetStatus,
             daily_wage: updatedWage,
             is_paid: updatedIsPaid,
             paid_amount: updatedPaidAmount,
@@ -409,6 +411,17 @@ export default function SalariesPage() {
     );
   };
 
+  const handleClearAll = () => {
+    setLocalRecords((prev) =>
+      prev.map((rec) => ({
+        ...rec,
+        status: null,
+        is_paid: 0,
+        paid_amount: 0,
+      }))
+    );
+  };
+
   // Save attendance to backend
   const handleSaveAttendance = async () => {
     setSavingAttendance(true);
@@ -416,7 +429,7 @@ export default function SalariesPage() {
     try {
       const recordsToSave = localRecords.map((r) => ({
         employee_id: r.employee_id,
-        status: r.status || 'Gelmedi',
+        status: r.status, // Can be 'Geldi', 'Yarım Gün', 'Gelmedi', or null (Boş)
         daily_wage: r.daily_wage,
         is_paid: (r.status === 'Geldi' || r.status === 'Yarım Gün') && (r.paid_amount || 0) > 0,
         paid_amount: r.status === 'Geldi' || r.status === 'Yarım Gün' ? (r.paid_amount || 0) : 0,
@@ -680,6 +693,7 @@ export default function SalariesPage() {
   const currentPresentCount = localRecords.filter((r) => r.status === 'Geldi').length;
   const currentHalfDayCount = localRecords.filter((r) => r.status === 'Yarım Gün').length;
   const currentAbsentCount = localRecords.filter((r) => r.status === 'Gelmedi').length;
+  const currentUnmarkedCount = localRecords.filter((r) => !r.status).length;
   const currentTotalWage = localRecords
     .filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün')
     .reduce((sum, r) => sum + r.daily_wage, 0);
@@ -750,7 +764,7 @@ export default function SalariesPage() {
               : 'border-transparent text-gray-500 hover:text-gray-900'
           }`}
         >
-          👥 Personel Listesi ({employees.length})
+          👥 Personel Listesi & Takvim ({employees.length})
         </button>
         <button
           onClick={() => setActiveTab('summary')}
@@ -834,11 +848,18 @@ export default function SalariesPage() {
               >
                 ₺ Tümünü Ödendi Yap
               </button>
+              <button
+                onClick={handleClearAll}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 border border-gray-200 transition-colors"
+                title="Tüm personelin yoklamasını temizle (boş bırak)"
+              >
+                🗑️ Tümünü Boş Yap
+              </button>
             </div>
           </div>
 
           {/* Daily Quick Summary Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
             <div className="bg-white rounded-xl border border-gray-100 p-3.5 text-center">
               <p className="text-xs font-medium text-gray-500">Kayıtlı Çalışan</p>
               <p className="text-xl font-bold text-gray-900 mt-1">{localRecords.length}</p>
@@ -856,8 +877,8 @@ export default function SalariesPage() {
               <p className="text-xl font-bold text-rose-700 mt-1">{currentAbsentCount}</p>
             </div>
             <div className="bg-gray-50 rounded-xl border border-gray-100 p-3.5 text-center">
-              <p className="text-xs font-medium text-gray-500">Günlük Hak Ediş</p>
-              <p className="text-lg font-bold text-gray-900 mt-1">{formatCurrency(currentTotalWage)}</p>
+              <p className="text-xs font-medium text-gray-500">Boş / Girilmedi</p>
+              <p className="text-xl font-bold text-gray-500 mt-1">{currentUnmarkedCount}</p>
             </div>
             <div className="bg-emerald-50/70 rounded-xl border border-emerald-100 p-3.5 text-center">
               <p className="text-xs font-medium text-emerald-700">Ödenen</p>
@@ -924,7 +945,9 @@ export default function SalariesPage() {
                               ? 'bg-white hover:bg-emerald-50/20'
                               : isHalfDay
                               ? 'bg-indigo-50/30 hover:bg-indigo-50/50'
-                              : 'bg-gray-50/40 hover:bg-gray-50'
+                              : rec.status === 'Gelmedi'
+                              ? 'bg-rose-50/30 hover:bg-rose-50/50'
+                              : 'bg-gray-50/30 hover:bg-gray-50'
                           }`}
                         >
                           {/* Employee Name */}
@@ -935,7 +958,7 @@ export default function SalariesPage() {
                                 if (emp) setCalendarEmployee(emp);
                               }}
                               className="flex items-center gap-3 cursor-pointer group"
-                              title="Yoklama Takvimini Gör"
+                              title="Yoklama Takvimini Aç & Gün Gün Düzenle"
                             >
                               <div className={`w-8 h-8 rounded-full font-bold flex items-center justify-center text-xs transition-colors ${
                                 isHalfDay
@@ -972,7 +995,7 @@ export default function SalariesPage() {
                             </div>
                           </td>
 
-                          {/* Attendance Status Toggle Buttons (Geldi, Yarım Gün, Gelmedi) */}
+                          {/* Attendance Status Toggle Buttons (Geldi, Yarım Gün, Gelmedi, Boş) */}
                           <td className="px-4 py-4 text-center">
                             <div className="inline-flex rounded-xl p-1 bg-gray-100 border border-gray-200 gap-1">
                               <button
@@ -1008,6 +1031,18 @@ export default function SalariesPage() {
                                 }`}
                               >
                                 ✗ Gelmedi
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange(rec.employee_id, null)}
+                                className={`px-2 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                                  !rec.status
+                                    ? 'bg-gray-700 text-white shadow-sm'
+                                    : 'text-gray-400 hover:text-gray-700'
+                                }`}
+                                title="Yoklama kaydını temizle / boş bırak"
+                              >
+                                — Boş
                               </button>
                             </div>
                           </td>
@@ -1080,7 +1115,9 @@ export default function SalariesPage() {
                                 )}
                               </div>
                             ) : (
-                              <span className="text-gray-400 text-xs italic">— Gelmedi —</span>
+                              <span className="text-gray-400 text-xs italic">
+                                {rec.status === 'Gelmedi' ? '— Gelmedi —' : '— Yoklama Yok —'}
+                              </span>
                             )}
                           </td>
 
@@ -1136,7 +1173,7 @@ export default function SalariesPage() {
               {/* Bottom save bar */}
               <div className="p-4 bg-gray-50/80 border-t border-gray-100 flex items-center justify-between">
                 <p className="text-xs text-gray-500">
-                  Değişiklikleri geçerli kılmak için &quot;Yoklamayı Kaydet&quot; butonuna basınız.
+                  Değişiklikleri geçerli kılmak için &quot;Yoklamayı Kaydet&quot; butonuna basınız. Boş bırakılanlar sisteme kaydedilmez.
                 </p>
                 <button
                   onClick={handleSaveAttendance}
@@ -1181,7 +1218,7 @@ export default function SalariesPage() {
                   <div
                     onClick={() => setCalendarEmployee(emp)}
                     className="flex items-start justify-between cursor-pointer group"
-                    title="Yoklama Takvimini Gör"
+                    title="Yoklama Takvimini Aç & Gün Gün İşaretle"
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-xl bg-primary-100 text-primary-700 font-bold flex items-center justify-center text-sm shadow-sm group-hover:bg-primary-600 group-hover:text-white transition-colors">
@@ -1210,7 +1247,7 @@ export default function SalariesPage() {
                   <div
                     onClick={() => setCalendarEmployee(emp)}
                     className="grid grid-cols-2 gap-2 bg-gray-50 hover:bg-primary-50/40 p-3 rounded-xl text-xs cursor-pointer transition-colors"
-                    title="Aylık takvim dökümünü aç"
+                    title="Aylık takvim dökümünü aç ve günleri düzenle"
                   >
                     <div>
                       <span className="text-gray-400 text-[11px]">Günlük Yevmiye</span>
@@ -1232,7 +1269,7 @@ export default function SalariesPage() {
                     </div>
                   </div>
 
-                  {/* Card Actions (Borç Öde, Takvim, Düzenle, Sil) */}
+                  {/* Card Actions (Borç Öde, Takvim & Yoklama Düzenle, Düzenle, Sil) */}
                   <div className="pt-2 border-t border-gray-100 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <button
@@ -1249,9 +1286,10 @@ export default function SalariesPage() {
 
                       <button
                         onClick={() => setCalendarEmployee(emp)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-primary-700 bg-primary-50 hover:bg-primary-100 transition-colors"
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold text-primary-700 bg-primary-50 hover:bg-primary-100 transition-colors"
+                        title="Bu çalışanın takviminde günlere tıklayarak yoklama girin"
                       >
-                        📅 Takvim
+                        📅 Yoklama Takvimi
                       </button>
 
                       <button
@@ -1645,12 +1683,19 @@ export default function SalariesPage() {
         </form>
       </Modal>
 
-      {/* Employee Attendance Calendar Modal */}
+      {/* Employee Attendance Calendar & Inline Day Editor Modal */}
       {calendarEmployee && (
         <EmployeeCalendarModal
           isOpen={!!calendarEmployee}
           onClose={() => setCalendarEmployee(null)}
           employee={calendarEmployee}
+          accounts={accounts}
+          onAttendanceUpdated={() => {
+            fetchEmployees();
+            fetchAccounts();
+            if (activeTab === 'attendance') fetchAttendance(selectedDate);
+            if (activeTab === 'summary') fetchMonthlySummary(selectedMonth);
+          }}
           onSelectDateForAttendance={(date) => {
             setSelectedDate(date);
             setActiveTab('attendance');
