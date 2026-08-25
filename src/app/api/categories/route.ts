@@ -4,21 +4,13 @@ import getDb from '@/lib/db';
 import { initializeDatabase } from '@/lib/db/schema';
 import { verifySession } from '@/lib/auth';
 
-let initialized = false;
-function ensureInit() {
-  if (!initialized) {
-    initializeDatabase();
-    initialized = true;
-  }
-}
-
 // GET: List all categories
 export async function GET() {
   try {
-    ensureInit();
+    await initializeDatabase();
     const db = getDb();
-    const categories = db.prepare('SELECT * FROM categories ORDER BY type, name').all();
-    return NextResponse.json({ categories });
+    const rs = await db.execute('SELECT * FROM categories ORDER BY type, name');
+    return NextResponse.json({ categories: rs.rows });
   } catch (error) {
     console.error('Categories GET error:', error);
     return NextResponse.json({ error: 'Sunucu hatası.' }, { status: 500 });
@@ -28,7 +20,7 @@ export async function GET() {
 // POST: Create a new category
 export async function POST(request: NextRequest) {
   try {
-    ensureInit();
+    await initializeDatabase();
     const session = await verifySession();
     if (!session) {
       return NextResponse.json({ error: 'Yetkisiz erişim.' }, { status: 401 });
@@ -45,11 +37,17 @@ export async function POST(request: NextRequest) {
     }
 
     const db = getDb();
-    const result = db.prepare('INSERT INTO categories (name, type) VALUES (?, ?)').run(name, type);
+    const result = await db.execute({
+      sql: 'INSERT INTO categories (name, type) VALUES (?, ?)',
+      args: [name, type],
+    });
 
-    const newCategory = db.prepare('SELECT * FROM categories WHERE id = ?').get(result.lastInsertRowid);
+    const newCatRs = await db.execute({
+      sql: 'SELECT * FROM categories WHERE id = ?',
+      args: [Number(result.lastInsertRowid)],
+    });
 
-    return NextResponse.json({ category: newCategory }, { status: 201 });
+    return NextResponse.json({ category: newCatRs.rows[0] }, { status: 201 });
   } catch (error) {
     console.error('Categories POST error:', error);
     return NextResponse.json({ error: 'Sunucu hatası.' }, { status: 500 });

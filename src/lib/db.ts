@@ -1,27 +1,35 @@
 // src/lib/db.ts
-// SQLite database connection manager (singleton)
-import Database from 'better-sqlite3';
+// Database connection manager for Turso (libSQL) and local fallback
+import { createClient, Client } from '@libsql/client';
 import path from 'path';
 import fs from 'fs';
 
-const DB_DIR = path.join(process.cwd(), 'data');
-const DB_PATH = path.join(DB_DIR, 'megachelon.db');
+let client: Client;
 
-// Ensure data directory exists
-if (!fs.existsSync(DB_DIR)) {
-  fs.mkdirSync(DB_DIR, { recursive: true });
-}
+export function getDb(): Client {
+  if (!client) {
+    const url = process.env.TURSO_DATABASE_URL;
+    const authToken = process.env.TURSO_AUTH_TOKEN;
 
-let db: Database.Database;
-
-function getDb(): Database.Database {
-  if (!db) {
-    db = new Database(DB_PATH);
-    // Enable WAL mode for better concurrent read performance
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
+    if (url) {
+      // Connect to Turso Cloud database
+      client = createClient({
+        url,
+        authToken,
+      });
+    } else {
+      // Local SQLite fallback for offline development
+      const DB_DIR = path.join(process.cwd(), 'data');
+      if (!fs.existsSync(DB_DIR)) {
+        fs.mkdirSync(DB_DIR, { recursive: true });
+      }
+      const DB_PATH = path.join(DB_DIR, 'megachelon.db');
+      client = createClient({
+        url: `file:${DB_PATH.replace(/\\/g, '/')}`,
+      });
+    }
   }
-  return db;
+  return client;
 }
 
 export default getDb;

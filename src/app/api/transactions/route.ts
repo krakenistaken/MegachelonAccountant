@@ -4,19 +4,12 @@ import getDb from '@/lib/db';
 import { initializeDatabase } from '@/lib/db/schema';
 import { verifySession } from '@/lib/auth';
 import { sseManager } from '@/lib/sse';
-
-let initialized = false;
-function ensureInit() {
-  if (!initialized) {
-    initializeDatabase();
-    initialized = true;
-  }
-}
+import type { InValue } from '@libsql/client';
 
 // GET: List all transactions with optional filters
 export async function GET(request: NextRequest) {
   try {
-    ensureInit();
+    await initializeDatabase();
     const db = getDb();
     const { searchParams } = new URL(request.url);
 
@@ -39,7 +32,7 @@ export async function GET(request: NextRequest) {
       LEFT JOIN users u ON t.created_by_user_id = u.id
       WHERE 1=1
     `;
-    const params: unknown[] = [];
+    const params: InValue[] = [];
 
     if (type) {
       query += ' AND t.type = ?';
@@ -64,9 +57,12 @@ export async function GET(request: NextRequest) {
 
     query += ' ORDER BY t.transaction_date DESC, t.created_at DESC';
 
-    const transactions = db.prepare(query).all(...params);
+    const transactions = await db.execute({
+      sql: query,
+      args: params,
+    });
 
-    return NextResponse.json({ transactions });
+    return NextResponse.json({ transactions: transactions.rows });
   } catch (error) {
     console.error('Transactions GET error:', error);
     return NextResponse.json({ error: 'Sunucu hatası.' }, { status: 500 });
@@ -76,7 +72,7 @@ export async function GET(request: NextRequest) {
 // POST: Create a new transaction
 export async function POST(request: NextRequest) {
   try {
-    ensureInit();
+    await initializeDatabase();
     const session = await verifySession();
     if (!session) {
       return NextResponse.json({ error: 'Yetkisiz erişim.' }, { status: 401 });
@@ -103,12 +99,10 @@ export async function POST(request: NextRequest) {
     const db = getDb();
 
     // Insert transaction
-    const result = db
-      .prepare(
-        `INSERT INTO transactions (type, category_id, account_id, currency, amount, transaction_date, description, created_by_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
+    const result = await db.execute({
+      sql: `INSERT INTO transactions (type, category_id, account_id, currency, amount, transaction_date, description, created_by_user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
         type,
         category_id,
         account_id,
@@ -116,16 +110,20 @@ export async function POST(request: NextRequest) {
         Math.abs(amount),
         transaction_date,
         description || null,
-        session.userId
-      );
+        session.userId,
+      ],
+    });
 
     // Update account balance
     const balanceChange = type === 'Gelir' ? Math.abs(amount) : -Math.abs(amount);
-    db.prepare('UPDATE accounts SET balance = balance + ? WHERE id = ?').run(balanceChange, account_id);
+    await db.execute({
+      sql: 'UPDATE accounts SET balance = balance + ? WHERE id = ?',
+      args: [balanceChange, account_id],
+    });
 
     // Fetch the created transaction with joins
-    const newTransaction = db
-      .prepare(`
+    const newTxRs = await db.execute({
+      sql: `
         SELECT 
           t.id, t.type, t.amount, t.currency, t.transaction_date, t.description,
           t.category_id, t.account_id, t.created_by_user_id, t.created_at, t.updated_at,
@@ -137,15 +135,20 @@ export async function POST(request: NextRequest) {
         LEFT JOIN accounts a ON t.account_id = a.id
         LEFT JOIN users u ON t.created_by_user_id = u.id
         WHERE t.id = ?
-      `)
-      .get(result.lastInsertRowid);
+      `,
+      args: [Number(result.lastInsertRowid)],
+    });
+    const newTransaction = newTxRs.rows[0];
 
     // Broadcast to all connected clients
     sseManager.broadcast('transaction_created', newTransaction);
 
     // Also broadcast updated account balance
-    const updatedAccount = db.prepare('SELECT id, name, balance FROM accounts WHERE id = ?').get(account_id);
-    sseManager.broadcast('account_updated', updatedAccount);
+    const updatedAccRs = await db.execute({
+      sql: 'SELECT id, name, balance FROM accounts WHERE id = ?',
+      args: [account_id],
+    });
+    sseManager.broadcast('account_updated', updatedAccRs.rows[0]);
 
     return NextResponse.json({ transaction: newTransaction }, { status: 201 });
   } catch (error) {

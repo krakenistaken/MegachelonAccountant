@@ -3,14 +3,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import getDb from '@/lib/db';
 import { initializeDatabase } from '@/lib/db/schema';
 
-let initialized = false;
-function ensureInit() {
-  if (!initialized) {
-    initializeDatabase();
-    initialized = true;
-  }
-}
-
 function formatDateStr(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -127,7 +119,7 @@ function getPeriodDates(period: string, customFrom?: string | null, customTo?: s
 
 export async function GET(request: NextRequest) {
   try {
-    ensureInit();
+    await initializeDatabase();
     const db = getDb();
     const { searchParams } = new URL(request.url);
 
@@ -142,22 +134,23 @@ export async function GET(request: NextRequest) {
     );
 
     // 1. Current Period Totals
-    const currentIncome = db
-      .prepare(
-        "SELECT COALESCE(SUM(amount), 0) as total, COUNT(id) as count FROM transactions WHERE type = 'Gelir' AND transaction_date BETWEEN ? AND ?"
-      )
-      .get(dateFrom, dateTo) as { total: number; count: number };
+    const [currentIncomeRs, currentExpenseRs] = await Promise.all([
+      db.execute({
+        sql: "SELECT COALESCE(SUM(amount), 0) as total, COUNT(id) as count FROM transactions WHERE type = 'Gelir' AND transaction_date BETWEEN ? AND ?",
+        args: [dateFrom, dateTo],
+      }),
+      db.execute({
+        sql: "SELECT COALESCE(SUM(amount), 0) as total, COUNT(id) as count FROM transactions WHERE type = 'Gider' AND transaction_date BETWEEN ? AND ?",
+        args: [dateFrom, dateTo],
+      }),
+    ]);
 
-    const currentExpense = db
-      .prepare(
-        "SELECT COALESCE(SUM(amount), 0) as total, COUNT(id) as count FROM transactions WHERE type = 'Gider' AND transaction_date BETWEEN ? AND ?"
-      )
-      .get(dateFrom, dateTo) as { total: number; count: number };
-
-    const totalIncome = currentIncome.total;
-    const totalExpense = currentExpense.total;
+    const totalIncome = Number(currentIncomeRs.rows[0]?.total || 0);
+    const totalIncomeCount = Number(currentIncomeRs.rows[0]?.count || 0);
+    const totalExpense = Number(currentExpenseRs.rows[0]?.total || 0);
+    const totalExpenseCount = Number(currentExpenseRs.rows[0]?.count || 0);
     const netProfit = totalIncome - totalExpense;
-    const transactionCount = currentIncome.count + currentExpense.count;
+    const transactionCount = totalIncomeCount + totalExpenseCount;
 
     // 2. Previous Period Totals (for comparison)
     let prevIncome = 0;
@@ -166,20 +159,19 @@ export async function GET(request: NextRequest) {
     let expenseGrowthRate: number | null = null;
 
     if (prevDateFrom && prevDateTo) {
-      const prevIncomeRow = db
-        .prepare(
-          "SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'Gelir' AND transaction_date BETWEEN ? AND ?"
-        )
-        .get(prevDateFrom, prevDateTo) as { total: number };
+      const [prevIncomeRow, prevExpenseRow] = await Promise.all([
+        db.execute({
+          sql: "SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'Gelir' AND transaction_date BETWEEN ? AND ?",
+          args: [prevDateFrom, prevDateTo],
+        }),
+        db.execute({
+          sql: "SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'Gider' AND transaction_date BETWEEN ? AND ?",
+          args: [prevDateFrom, prevDateTo],
+        }),
+      ]);
 
-      const prevExpenseRow = db
-        .prepare(
-          "SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'Gider' AND transaction_date BETWEEN ? AND ?"
-        )
-        .get(prevDateFrom, prevDateTo) as { total: number };
-
-      prevIncome = prevIncomeRow.total;
-      prevExpense = prevExpenseRow.total;
+      prevIncome = Number(prevIncomeRow.rows[0]?.total || 0);
+      prevExpense = Number(prevExpenseRow.rows[0]?.total || 0);
 
       if (prevIncome > 0) {
         incomeGrowthRate = ((totalIncome - prevIncome) / prevIncome) * 100;
@@ -189,87 +181,109 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 3. Category Breakdown (Expenses & Income)
-    const categoryStats = db
-      .prepare(
-        `SELECT 
-          c.id, c.name, c.type,
-          COALESCE(SUM(t.amount), 0) as total,
-          COUNT(t.id) as count
-        FROM categories c
-        LEFT JOIN transactions t ON c.id = t.category_id AND t.transaction_date BETWEEN ? AND ?
-        GROUP BY c.id
-        HAVING total > 0
-        ORDER BY total DESC`
-      )
-      .all(dateFrom, dateTo) as Array<{
-        id: number;
-        name: string;
-        type: string;
-        total: number;
-        count: number;
-      }>;
+    // 3. Category Breakdown, Accounts, Time Series, Transactions
+    const [categoryStatsRs, accountsDataRs, txByDateRs, transactionsRs] = await Promise.all([
+      db.execute({
+        sql: `SELECT 
+                c.id, c.name, c.type,
+                COALESCE(SUM(t.amount), 0) as total,
+                COUNT(t.id) as count
+              FROM categories c
+              LEFT JOIN transactions t ON c.id = t.category_id AND t.transaction_date BETWEEN ? AND ?
+              GROUP BY c.id
+              HAVING total > 0
+              ORDER BY total DESC`,
+        args: [dateFrom, dateTo],
+      }),
+      db.execute({
+        sql: `SELECT 
+                a.id, a.name, a.balance,
+                COALESCE(SUM(CASE WHEN t.type = 'Gelir' THEN t.amount ELSE 0 END), 0) as inflow,
+                COALESCE(SUM(CASE WHEN t.type = 'Gider' THEN t.amount ELSE 0 END), 0) as outflow
+              FROM accounts a
+              LEFT JOIN transactions t ON a.id = t.account_id AND t.transaction_date BETWEEN ? AND ?
+              GROUP BY a.id
+              ORDER BY a.name`,
+        args: [dateFrom, dateTo],
+      }),
+      db.execute({
+        sql: `SELECT 
+                transaction_date,
+                COALESCE(SUM(CASE WHEN type = 'Gelir' THEN amount ELSE 0 END), 0) as income,
+                COALESCE(SUM(CASE WHEN type = 'Gider' THEN amount ELSE 0 END), 0) as expense
+              FROM transactions
+              WHERE transaction_date BETWEEN ? AND ?
+              GROUP BY transaction_date
+              ORDER BY transaction_date ASC`,
+        args: [dateFrom, dateTo],
+      }),
+      db.execute({
+        sql: `SELECT 
+                t.id, t.type, t.amount, t.currency, t.transaction_date, t.description,
+                c.name as category_name,
+                a.name as account_name,
+                u.username as created_by
+              FROM transactions t
+              LEFT JOIN categories c ON t.category_id = c.id
+              LEFT JOIN accounts a ON t.account_id = a.id
+              LEFT JOIN users u ON t.created_by_user_id = u.id
+              WHERE t.transaction_date BETWEEN ? AND ?
+              ORDER BY t.transaction_date DESC, t.created_at DESC`,
+        args: [dateFrom, dateTo],
+      }),
+    ]);
+
+    const categoryStats = categoryStatsRs.rows as unknown as Array<{
+      id: number;
+      name: string;
+      type: string;
+      total: number;
+      count: number;
+    }>;
 
     const expenseCategories = categoryStats
       .filter((c) => c.type === 'Gider')
       .map((c) => ({
         ...c,
-        percentage: totalExpense > 0 ? (c.total / totalExpense) * 100 : 0,
+        total: Number(c.total),
+        percentage: totalExpense > 0 ? (Number(c.total) / totalExpense) * 100 : 0,
       }));
 
     const incomeCategories = categoryStats
       .filter((c) => c.type === 'Gelir')
       .map((c) => ({
         ...c,
-        percentage: totalIncome > 0 ? (c.total / totalIncome) * 100 : 0,
+        total: Number(c.total),
+        percentage: totalIncome > 0 ? (Number(c.total) / totalIncome) * 100 : 0,
       }));
 
-    // 4. Accounts Snapshot & Inflow/Outflow for the period
-    const accountsData = db
-      .prepare(
-        `SELECT 
-          a.id, a.name, a.balance,
-          COALESCE(SUM(CASE WHEN t.type = 'Gelir' THEN t.amount ELSE 0 END), 0) as inflow,
-          COALESCE(SUM(CASE WHEN t.type = 'Gider' THEN t.amount ELSE 0 END), 0) as outflow
-        FROM accounts a
-        LEFT JOIN transactions t ON a.id = t.account_id AND t.transaction_date BETWEEN ? AND ?
-        GROUP BY a.id
-        ORDER BY a.name`
-      )
-      .all(dateFrom, dateTo) as Array<{
-        id: number;
-        name: string;
-        balance: number;
-        inflow: number;
-        outflow: number;
-      }>;
+    const accountsData = accountsDataRs.rows as unknown as Array<{
+      id: number;
+      name: string;
+      balance: number;
+      inflow: number;
+      outflow: number;
+    }>;
 
     const accounts = accountsData.map((a) => ({
       ...a,
-      net: a.inflow - a.outflow,
+      balance: Number(a.balance),
+      inflow: Number(a.inflow),
+      outflow: Number(a.outflow),
+      net: Number(a.inflow) - Number(a.outflow),
     }));
 
-    // 5. Time Series / Intervals for Bar Charts
-    const txByDate = db
-      .prepare(
-        `SELECT 
-          transaction_date,
-          COALESCE(SUM(CASE WHEN type = 'Gelir' THEN amount ELSE 0 END), 0) as income,
-          COALESCE(SUM(CASE WHEN type = 'Gider' THEN amount ELSE 0 END), 0) as expense
-        FROM transactions
-        WHERE transaction_date BETWEEN ? AND ?
-        GROUP BY transaction_date
-        ORDER BY transaction_date ASC`
-      )
-      .all(dateFrom, dateTo) as Array<{
-        transaction_date: string;
-        income: number;
-        expense: number;
-      }>;
+    const txByDate = txByDateRs.rows as unknown as Array<{
+      transaction_date: string;
+      income: number;
+      expense: number;
+    }>;
 
     // Fill in dates for complete chart timeline
     const dateMap = new Map<string, { income: number; expense: number }>();
-    txByDate.forEach((r) => dateMap.set(r.transaction_date, { income: r.income, expense: r.expense }));
+    txByDate.forEach((r) =>
+      dateMap.set(r.transaction_date, { income: Number(r.income), expense: Number(r.expense) })
+    );
 
     const chartPoints: Array<{
       date: string;
@@ -283,7 +297,6 @@ export async function GET(request: NextRequest) {
     const end = new Date(dateTo);
     const cur = new Date(start);
 
-    // If span is more than 60 days, we don't necessarily generate every single day, but for month/week we do
     const dayDiff = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
 
     if (dayDiff <= 35) {
@@ -308,29 +321,12 @@ export async function GET(request: NextRequest) {
         chartPoints.push({
           date: r.transaction_date,
           label: `${d}.${m}`,
-          income: r.income,
-          expense: r.expense,
-          net: r.income - r.expense,
+          income: Number(r.income),
+          expense: Number(r.expense),
+          net: Number(r.income) - Number(r.expense),
         });
       });
     }
-
-    // 6. Full transactions list for this period
-    const transactions = db
-      .prepare(
-        `SELECT 
-          t.id, t.type, t.amount, t.currency, t.transaction_date, t.description,
-          c.name as category_name,
-          a.name as account_name,
-          u.username as created_by
-        FROM transactions t
-        LEFT JOIN categories c ON t.category_id = c.id
-        LEFT JOIN accounts a ON t.account_id = a.id
-        LEFT JOIN users u ON t.created_by_user_id = u.id
-        WHERE t.transaction_date BETWEEN ? AND ?
-        ORDER BY t.transaction_date DESC, t.created_at DESC`
-      )
-      .all(dateFrom, dateTo);
 
     return NextResponse.json({
       period,
@@ -353,7 +349,7 @@ export async function GET(request: NextRequest) {
       incomeCategories,
       accounts,
       chartPoints,
-      transactions,
+      transactions: transactionsRs.rows,
     });
   } catch (error) {
     console.error('Reports API error:', error);

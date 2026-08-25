@@ -3,38 +3,20 @@ import { NextResponse } from 'next/server';
 import getDb from '@/lib/db';
 import { initializeDatabase } from '@/lib/db/schema';
 
-let initialized = false;
-function ensureInit() {
-  if (!initialized) {
-    initializeDatabase();
-    initialized = true;
-  }
-}
-
 export async function GET() {
   try {
-    ensureInit();
+    await initializeDatabase();
     const db = getDb();
 
-    // Total income
-    const totalIncome = db
-      .prepare("SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'Gelir'")
-      .get() as { total: number };
+    // Current month prefix YYYY-MM
+    const currentMonth = new Date().toISOString().slice(0, 7);
 
-    // Total expense
-    const totalExpense = db
-      .prepare("SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'Gider'")
-      .get() as { total: number };
-
-    // Net balance
-    const netBalance = totalIncome.total - totalExpense.total;
-
-    // Account balances
-    const accounts = db.prepare('SELECT id, name, balance FROM accounts ORDER BY name').all();
-
-    // Recent transactions (last 10)
-    const recentTransactions = db
-      .prepare(`
+    // Parallel query execution
+    const [totalIncRs, totalExpRs, accountsRs, recentTxRs, monthIncRs, monthExpRs] = await Promise.all([
+      db.execute("SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'Gelir'"),
+      db.execute("SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'Gider'"),
+      db.execute('SELECT id, name, balance FROM accounts ORDER BY name'),
+      db.execute(`
         SELECT 
           t.id, t.type, t.amount, t.currency, t.transaction_date, t.description, t.created_at,
           c.name as category_name,
@@ -44,31 +26,32 @@ export async function GET() {
         LEFT JOIN accounts a ON t.account_id = a.id
         ORDER BY t.created_at DESC
         LIMIT 10
-      `)
-      .all();
+      `),
+      db.execute({
+        sql: "SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'Gelir' AND transaction_date LIKE ?",
+        args: [`${currentMonth}%`],
+      }),
+      db.execute({
+        sql: "SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'Gider' AND transaction_date LIKE ?",
+        args: [`${currentMonth}%`],
+      }),
+    ]);
 
-    // Monthly summary (current month)
-    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
-    const monthlyIncome = db
-      .prepare(
-        "SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'Gelir' AND transaction_date LIKE ?"
-      )
-      .get(`${currentMonth}%`) as { total: number };
+    const totalIncome = Number(totalIncRs.rows[0]?.total || 0);
+    const totalExpense = Number(totalExpRs.rows[0]?.total || 0);
+    const netBalance = totalIncome - totalExpense;
 
-    const monthlyExpense = db
-      .prepare(
-        "SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'Gider' AND transaction_date LIKE ?"
-      )
-      .get(`${currentMonth}%`) as { total: number };
+    const monthlyIncome = Number(monthIncRs.rows[0]?.total || 0);
+    const monthlyExpense = Number(monthExpRs.rows[0]?.total || 0);
 
     return NextResponse.json({
-      totalIncome: totalIncome.total,
-      totalExpense: totalExpense.total,
+      totalIncome,
+      totalExpense,
       netBalance,
-      accounts,
-      recentTransactions,
-      monthlyIncome: monthlyIncome.total,
-      monthlyExpense: monthlyExpense.total,
+      accounts: accountsRs.rows,
+      recentTransactions: recentTxRs.rows,
+      monthlyIncome,
+      monthlyExpense,
     });
   } catch (error) {
     console.error('Dashboard error:', error);

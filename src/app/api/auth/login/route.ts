@@ -5,19 +5,10 @@ import getDb from '@/lib/db';
 import { initializeDatabase } from '@/lib/db/schema';
 import { createSession } from '@/lib/auth';
 
-// Ensure database is initialized
-let initialized = false;
-function ensureInit() {
-  if (!initialized) {
-    initializeDatabase();
-    initialized = true;
-  }
-}
-
 export async function POST(request: NextRequest) {
   try {
-    ensureInit();
-    
+    await initializeDatabase();
+
     const { username, password } = await request.json();
 
     if (!username || !password) {
@@ -28,12 +19,19 @@ export async function POST(request: NextRequest) {
     }
 
     const db = getDb();
-    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as {
-      id: number;
-      username: string;
-      password_hash: string;
-      role: string;
-    } | undefined;
+    const userRs = await db.execute({
+      sql: 'SELECT * FROM users WHERE username = ?',
+      args: [username],
+    });
+
+    const user = userRs.rows[0] as unknown as
+      | {
+          id: number;
+          username: string;
+          password_hash: string;
+          role: string;
+        }
+      | undefined;
 
     if (!user) {
       return NextResponse.json(

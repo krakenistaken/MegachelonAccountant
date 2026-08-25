@@ -5,21 +5,13 @@ import { initializeDatabase } from '@/lib/db/schema';
 import { verifySession } from '@/lib/auth';
 import { sseManager } from '@/lib/sse';
 
-let initialized = false;
-function ensureInit() {
-  if (!initialized) {
-    initializeDatabase();
-    initialized = true;
-  }
-}
-
 // GET: List all accounts
 export async function GET() {
   try {
-    ensureInit();
+    await initializeDatabase();
     const db = getDb();
-    const accounts = db.prepare('SELECT * FROM accounts ORDER BY name').all();
-    return NextResponse.json({ accounts });
+    const rs = await db.execute('SELECT * FROM accounts ORDER BY name');
+    return NextResponse.json({ accounts: rs.rows });
   } catch (error) {
     console.error('Accounts GET error:', error);
     return NextResponse.json({ error: 'Sunucu hatası.' }, { status: 500 });
@@ -29,7 +21,7 @@ export async function GET() {
 // POST: Create a new account
 export async function POST(request: NextRequest) {
   try {
-    ensureInit();
+    await initializeDatabase();
     const session = await verifySession();
     if (!session) {
       return NextResponse.json({ error: 'Yetkisiz erişim.' }, { status: 401 });
@@ -44,13 +36,25 @@ export async function POST(request: NextRequest) {
     const db = getDb();
 
     // Check for duplicate name
-    const existing = db.prepare('SELECT id FROM accounts WHERE name = ?').get(name);
-    if (existing) {
+    const existing = await db.execute({
+      sql: 'SELECT id FROM accounts WHERE name = ?',
+      args: [name],
+    });
+
+    if (existing.rows.length > 0) {
       return NextResponse.json({ error: 'Bu isimde bir kasa zaten var.' }, { status: 409 });
     }
 
-    const result = db.prepare('INSERT INTO accounts (name, balance) VALUES (?, 0)').run(name);
-    const newAccount = db.prepare('SELECT * FROM accounts WHERE id = ?').get(result.lastInsertRowid);
+    const result = await db.execute({
+      sql: 'INSERT INTO accounts (name, balance) VALUES (?, 0)',
+      args: [name],
+    });
+
+    const newAccRs = await db.execute({
+      sql: 'SELECT * FROM accounts WHERE id = ?',
+      args: [Number(result.lastInsertRowid)],
+    });
+    const newAccount = newAccRs.rows[0];
 
     sseManager.broadcast('account_created', newAccount);
 
