@@ -72,6 +72,43 @@ interface MonthlySummaryResponse {
   employees: MonthlyEmployeeStat[];
 }
 
+interface SalaryHistoryItem {
+  attendance_id: number;
+  employee_id: number;
+  first_name: string;
+  last_name: string;
+  employee_phone: string | null;
+  attendance_date: string;
+  attendance_status: string;
+  daily_wage: number;
+  is_paid: number;
+  paid_amount: number;
+  remaining_due: number;
+  payment_category: 'full' | 'partial' | 'unpaid' | 'absent';
+  account_id: number | null;
+  account_name: string | null;
+  transaction_id: number | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+  transaction_amount: number | null;
+  transaction_date: string | null;
+  transaction_description: string | null;
+  created_by_username: string | null;
+}
+
+interface SalaryHistoryResponse {
+  history: SalaryHistoryItem[];
+  summary: {
+    totalRecords: number;
+    totalWageEarned: number;
+    totalPaidAmount: number;
+    totalRemainingDue: number;
+    paidFromAccounts: number;
+    paidExternally: number;
+  };
+}
+
 function formatCurrency(amount: number, currency: string = 'TRY') {
   const symbols: Record<string, string> = { TRY: '₺', USD: '$', EUR: '€' };
   const symbol = symbols[currency] || currency;
@@ -79,7 +116,7 @@ function formatCurrency(amount: number, currency: string = 'TRY') {
 }
 
 export default function SalariesPage() {
-  const [activeTab, setActiveTab] = useState<'attendance' | 'employees' | 'summary'>('attendance');
+  const [activeTab, setActiveTab] = useState<'attendance' | 'employees' | 'summary' | 'history'>('attendance');
 
   // Today's date string
   const todayStr = new Date().toISOString().split('T')[0];
@@ -130,6 +167,14 @@ export default function SalariesPage() {
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
   const [monthlyData, setMonthlyData] = useState<MonthlySummaryResponse | null>(null);
   const [loadingMonthly, setLoadingMonthly] = useState(false);
+
+  // Salary Activity History state (TAB 4)
+  const [historyData, setHistoryData] = useState<SalaryHistoryResponse | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historyFilterEmployee, setHistoryFilterEmployee] = useState<string>('');
+  const [historyFilterPayment, setHistoryFilterPayment] = useState<string>('');
+  const [historyFilterMonth, setHistoryFilterMonth] = useState<string>('');
+  const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
 
   // Fetch accounts
   const fetchAccounts = useCallback(async () => {
@@ -197,6 +242,32 @@ export default function SalariesPage() {
     }
   }, []);
 
+  // Fetch Salary & Attendance History (Tab 4)
+  const fetchSalaryHistory = useCallback(async () => {
+    setLoadingHistory(true);
+    try {
+      const params = new URLSearchParams();
+      if (historyFilterEmployee) params.set('employee_id', historyFilterEmployee);
+      if (historyFilterPayment) params.set('payment_status', historyFilterPayment);
+
+      if (historyFilterMonth) {
+        params.set('start_date', `${historyFilterMonth}-01`);
+        const [y, m] = historyFilterMonth.split('-').map(Number);
+        const lastDay = new Date(y, m, 0).getDate();
+        params.set('end_date', `${historyFilterMonth}-${String(lastDay).padStart(2, '0')}`);
+      }
+
+      const res = await fetch(`/api/salaries/history?${params.toString()}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setHistoryData(data);
+    } catch (err) {
+      console.error('Fetch salary history error:', err);
+    } finally {
+      setLoadingHistory(false);
+    }
+  }, [historyFilterEmployee, historyFilterPayment, historyFilterMonth]);
+
   useEffect(() => {
     fetchAccounts();
     fetchEmployees();
@@ -209,8 +280,10 @@ export default function SalariesPage() {
       fetchEmployees();
     } else if (activeTab === 'summary') {
       fetchMonthlySummary(selectedMonth);
+    } else if (activeTab === 'history') {
+      fetchSalaryHistory();
     }
-  }, [activeTab, selectedDate, selectedMonth, fetchAttendance, fetchEmployees, fetchMonthlySummary]);
+  }, [activeTab, selectedDate, selectedMonth, fetchAttendance, fetchEmployees, fetchMonthlySummary, fetchSalaryHistory]);
 
   // Real-time SSE listener
   useRealtimeEvents({
@@ -219,11 +292,13 @@ export default function SalariesPage() {
       fetchAccounts();
       fetchEmployees();
       if (activeTab === 'summary') fetchMonthlySummary(selectedMonth);
+      if (activeTab === 'history') fetchSalaryHistory();
     },
     onTransactionDeleted: () => {
       fetchAccounts();
       fetchEmployees();
       if (activeTab === 'summary') fetchMonthlySummary(selectedMonth);
+      if (activeTab === 'history') fetchSalaryHistory();
     },
   });
 
@@ -255,7 +330,6 @@ export default function SalariesPage() {
     setLocalRecords((prev) =>
       prev.map((rec) => {
         if (rec.employee_id === employeeId) {
-          // If clicking currently active status, toggle it off (to null / Boş)
           const targetStatus = rec.status === newStatus ? null : newStatus;
 
           let updatedWage = rec.daily_wage;
@@ -429,7 +503,7 @@ export default function SalariesPage() {
     try {
       const recordsToSave = localRecords.map((r) => ({
         employee_id: r.employee_id,
-        status: r.status, // Can be 'Geldi', 'Yarım Gün', 'Gelmedi', or null (Boş)
+        status: r.status,
         daily_wage: r.daily_wage,
         is_paid: (r.status === 'Geldi' || r.status === 'Yarım Gün') && (r.paid_amount || 0) > 0,
         paid_amount: r.status === 'Geldi' || r.status === 'Yarım Gün' ? (r.paid_amount || 0) : 0,
@@ -586,6 +660,7 @@ export default function SalariesPage() {
       fetchAccounts();
       if (activeTab === 'attendance') fetchAttendance(selectedDate);
       if (activeTab === 'summary') fetchMonthlySummary(selectedMonth);
+      if (activeTab === 'history') fetchSalaryHistory();
 
       setTimeout(() => {
         setPayDueModalOpen(false);
@@ -689,6 +764,63 @@ export default function SalariesPage() {
     URL.revokeObjectURL(url);
   };
 
+  // Export Salary History to Excel (Tab 4)
+  const handleExportHistoryExcel = () => {
+    if (!historyData || historyData.history.length === 0) return;
+
+    const filtered = historyData.history.filter((h) => {
+      if (!historySearchQuery) return true;
+      const q = historySearchQuery.toLowerCase();
+      return (
+        `${h.first_name} ${h.last_name}`.toLowerCase().includes(q) ||
+        (h.note && h.note.toLowerCase().includes(q)) ||
+        (h.transaction_description && h.transaction_description.toLowerCase().includes(q))
+      );
+    });
+
+    const rows = filtered.map((h) => ({
+      'Tarih': h.attendance_date,
+      'Çalışan': `${h.first_name} ${h.last_name}`,
+      'Yoklama Durumu': h.attendance_status,
+      'Günlük Hak Ediş (₺)': h.daily_wage,
+      'Ödenen Tutar (₺)': h.paid_amount,
+      'Kalan Borç (₺)': h.remaining_due,
+      'Ödenen Kasa': h.account_name || 'Harici / Elden',
+      'İşlem Açıklaması': h.transaction_description || h.note || '—',
+      'Kayıt Zamanı': h.created_at ? new Date(h.created_at).toLocaleString('tr-TR') : '—',
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    worksheet['!cols'] = [
+      { wch: 15 },
+      { wch: 25 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 20 },
+      { wch: 35 },
+      { wch: 22 },
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Maas_Hareket_Gecmisi');
+
+    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([buffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Megachelon_Maas_Hareket_Gecmisi_${new Date().toISOString().split('T')[0]}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   // Local attendance stats calculation
   const currentPresentCount = localRecords.filter((r) => r.status === 'Geldi').length;
   const currentHalfDayCount = localRecords.filter((r) => r.status === 'Yarım Gün').length;
@@ -701,6 +833,18 @@ export default function SalariesPage() {
     .filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün')
     .reduce((sum, r) => sum + (r.paid_amount || 0), 0);
   const currentUnpaidAmount = currentTotalWage - currentPaidAmount;
+
+  // Filtered History list
+  const filteredHistoryItems = (historyData?.history || []).filter((h) => {
+    if (!historySearchQuery) return true;
+    const q = historySearchQuery.toLowerCase();
+    return (
+      `${h.first_name} ${h.last_name}`.toLowerCase().includes(q) ||
+      (h.note && h.note.toLowerCase().includes(q)) ||
+      (h.transaction_description && h.transaction_description.toLowerCase().includes(q)) ||
+      (h.account_name && h.account_name.toLowerCase().includes(q))
+    );
+  });
 
   return (
     <div className="space-y-6">
@@ -744,8 +888,8 @@ export default function SalariesPage() {
         )}
       </div>
 
-      {/* Main Tab Navigation */}
-      <div className="flex items-center gap-2 border-b border-gray-200">
+      {/* Main Tab Navigation (4 Tabs) */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-gray-200">
         <button
           onClick={() => setActiveTab('attendance')}
           className={`pb-3 px-3 text-sm font-bold border-b-2 transition-all duration-200 ${
@@ -775,6 +919,16 @@ export default function SalariesPage() {
           }`}
         >
           📊 Aylık Hakediş & Bordro
+        </button>
+        <button
+          onClick={() => setActiveTab('history')}
+          className={`pb-3 px-3 text-sm font-bold border-b-2 transition-all duration-200 ${
+            activeTab === 'history'
+              ? 'border-primary-600 text-primary-600'
+              : 'border-transparent text-gray-500 hover:text-gray-900'
+          }`}
+        >
+          📜 Maaş & Ödeme Hareketleri
         </button>
       </div>
 
@@ -897,11 +1051,6 @@ export default function SalariesPage() {
             </div>
           ) : localRecords.length === 0 ? (
             <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-gray-200">
-              <div className="w-12 h-12 mx-auto rounded-full bg-gray-100 flex items-center justify-center mb-3 text-gray-400">
-                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
-                </svg>
-              </div>
               <p className="text-sm font-bold text-gray-700">Kayıtlı Çalışan Bulunamadı</p>
               <p className="text-xs text-gray-400 mt-1 mb-4">
                 Yoklama alabilmek için önce Personel Listesi sekmesinden çalışan ekleyin.
@@ -995,7 +1144,7 @@ export default function SalariesPage() {
                             </div>
                           </td>
 
-                          {/* Attendance Status Toggle Buttons (Geldi, Yarım Gün, Gelmedi, Boş) */}
+                          {/* Attendance Status Toggle Buttons */}
                           <td className="px-4 py-4 text-center">
                             <div className="inline-flex rounded-xl p-1 bg-gray-100 border border-gray-200 gap-1">
                               <button
@@ -1485,6 +1634,270 @@ export default function SalariesPage() {
         </div>
       )}
 
+      {/* TAB 4: MAAŞ & ÖDEME HAREKET GEÇMİŞİ (YENİ) */}
+      {activeTab === 'history' && (
+        <div className="space-y-6 animate-in fade-in duration-200">
+          {/* Summary KPI Cards for History */}
+          {historyData && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+              <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm">
+                <span className="text-xs font-semibold text-gray-500">Toplam Hakediş</span>
+                <p className="text-xl font-bold text-gray-900 mt-1">
+                  {formatCurrency(historyData.summary.totalWageEarned)}
+                </p>
+                <p className="text-[11px] text-gray-400 mt-0.5">{historyData.summary.totalRecords} işlem kaydı</p>
+              </div>
+
+              <div className="bg-emerald-50 rounded-2xl border border-emerald-100 p-4 shadow-sm">
+                <span className="text-xs font-semibold text-emerald-800">Toplam Ödenen Maaş</span>
+                <p className="text-xl font-bold text-emerald-700 mt-1">
+                  {formatCurrency(historyData.summary.totalPaidAmount)}
+                </p>
+                <p className="text-[11px] text-emerald-600 mt-0.5">Tamamlanan ödemeler</p>
+              </div>
+
+              <div className="bg-blue-50 rounded-2xl border border-blue-100 p-4 shadow-sm">
+                <span className="text-xs font-semibold text-blue-800">Kasalardan Çıkan</span>
+                <p className="text-xl font-bold text-blue-700 mt-1">
+                  {formatCurrency(historyData.summary.paidFromAccounts)}
+                </p>
+                <p className="text-[11px] text-blue-600 mt-0.5">Kasa bakiyesinden düşülen</p>
+              </div>
+
+              <div className="bg-purple-50 rounded-2xl border border-purple-100 p-4 shadow-sm">
+                <span className="text-xs font-semibold text-purple-800">Harici / Elden Ödenen</span>
+                <p className="text-xl font-bold text-purple-700 mt-1">
+                  {formatCurrency(historyData.summary.paidExternally)}
+                </p>
+                <p className="text-[11px] text-purple-600 mt-0.5">Kasaya dokunulmadan</p>
+              </div>
+
+              <div className="bg-amber-50 rounded-2xl border border-amber-100 p-4 shadow-sm col-span-2 sm:col-span-1">
+                <span className="text-xs font-semibold text-amber-800">Kalan Borç / Bekleyen</span>
+                <p className="text-xl font-bold text-amber-700 mt-1">
+                  {formatCurrency(historyData.summary.totalRemainingDue)}
+                </p>
+                <p className="text-[11px] text-amber-600 mt-0.5">Personele ödenecek</p>
+              </div>
+            </div>
+          )}
+
+          {/* Filters & Export Toolbar */}
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm space-y-3">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              {/* Search Bar */}
+              <div className="relative flex-1">
+                <svg className="w-4 h-4 text-gray-400 absolute left-3.5 top-3" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+                </svg>
+                <input
+                  type="text"
+                  placeholder="Çalışan adı, not veya açıklama ile ara..."
+                  value={historySearchQuery}
+                  onChange={(e) => setHistorySearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 rounded-xl border border-gray-200 text-xs font-medium bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                />
+              </div>
+
+              {/* Employee Filter */}
+              <select
+                value={historyFilterEmployee}
+                onChange={(e) => setHistoryFilterEmployee(e.target.value)}
+                className="px-3.5 py-2 rounded-xl border border-gray-200 text-xs font-semibold bg-gray-50 text-gray-800 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+              >
+                <option value="">— Tüm Çalışanlar ({employees.length}) —</option>
+                {employees.map((emp) => (
+                  <option key={emp.id} value={emp.id}>
+                    {emp.first_name} {emp.last_name}
+                  </option>
+                ))}
+              </select>
+
+              {/* Month Filter */}
+              <input
+                type="month"
+                value={historyFilterMonth}
+                onChange={(e) => setHistoryFilterMonth(e.target.value)}
+                className="px-3.5 py-2 rounded-xl border border-gray-200 text-xs font-semibold bg-gray-50 text-gray-800 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                title="Aya göre filtrele"
+              />
+
+              {/* Export Button */}
+              <button
+                onClick={handleExportHistoryExcel}
+                disabled={!historyData || filteredHistoryItems.length === 0}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition-all disabled:opacity-50"
+              >
+                <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                </svg>
+                Excel İndir (.xlsx)
+              </button>
+            </div>
+
+            {/* Quick Payment Status Filters */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-100">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[
+                  { key: '', label: 'Tüm Hareketler' },
+                  { key: 'paid', label: '✓ Tam Ödenenler' },
+                  { key: 'partial', label: '⚡ Kısmi Ödenenler' },
+                  { key: 'unpaid', label: '⏳ Bekleyen / Borç Yazılanlar' },
+                ].map((tab) => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setHistoryFilterPayment(tab.key)}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                      historyFilterPayment === tab.key
+                        ? 'bg-primary-600 text-white shadow-sm'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <span className="text-xs text-gray-400 font-medium">
+                {filteredHistoryItems.length} kayıt gösteriliyor
+              </span>
+            </div>
+          </div>
+
+          {/* History Data Table */}
+          {loadingHistory ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="w-8 h-8 border-3 border-primary-200 border-t-primary-600 rounded-full animate-spin" />
+            </div>
+          ) : filteredHistoryItems.length === 0 ? (
+            <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-gray-200">
+              <div className="w-12 h-12 mx-auto rounded-full bg-gray-100 flex items-center justify-center mb-3 text-gray-400">
+                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                </svg>
+              </div>
+              <p className="text-sm font-bold text-gray-700">Filtreye Uygun İşlem Hareketi Bulunamadı</p>
+              <p className="text-xs text-gray-400 mt-1">
+                Filtreleri temizleyerek veya farklı bir çalışan seçerek tekrar deneyebilirsiniz.
+              </p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-gray-50/80 border-b border-gray-100 text-gray-500 font-bold uppercase text-left">
+                      <th className="px-5 py-3.5">İşlem Tarihi</th>
+                      <th className="px-5 py-3.5">Çalışan</th>
+                      <th className="px-4 py-3.5">Yoklama Durumu</th>
+                      <th className="px-4 py-3.5 text-right">Günlük Hakediş</th>
+                      <th className="px-4 py-3.5 text-right">Ödenen Tutar</th>
+                      <th className="px-4 py-3.5 text-right">Kalan Borç</th>
+                      <th className="px-4 py-3.5">Ödeme Kanalı (Kasa)</th>
+                      <th className="px-5 py-3.5">Açıklama / Detay</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50 font-medium">
+                    {filteredHistoryItems.map((h) => {
+                      const isFull = h.payment_category === 'full';
+                      const isPartial = h.payment_category === 'partial';
+                      const isUnpaid = h.payment_category === 'unpaid';
+                      const isAbsent = h.payment_category === 'absent';
+
+                      return (
+                        <tr key={h.attendance_id} className="hover:bg-gray-50/60 transition-colors">
+                          {/* Date */}
+                          <td className="px-5 py-3.5 text-gray-900 font-bold whitespace-nowrap">
+                            {new Date(h.attendance_date).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          </td>
+
+                          {/* Employee */}
+                          <td className="px-5 py-3.5">
+                            <div
+                              onClick={() => {
+                                const emp = employees.find((e) => e.id === h.employee_id);
+                                if (emp) setCalendarEmployee(emp);
+                              }}
+                              className="font-bold text-gray-900 hover:text-primary-600 cursor-pointer flex items-center gap-1.5"
+                              title="Takvimini Aç"
+                            >
+                              <span>{h.first_name} {h.last_name}</span>
+                              <span className="text-gray-400 hover:text-primary-500 text-xs">📅</span>
+                            </div>
+                          </td>
+
+                          {/* Status */}
+                          <td className="px-4 py-3.5">
+                            <span
+                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold ${
+                                h.attendance_status === 'Geldi'
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  : h.attendance_status === 'Yarım Gün'
+                                  ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                  : 'bg-rose-50 text-rose-700 border border-rose-200'
+                              }`}
+                            >
+                              {h.attendance_status === 'Geldi' ? '✓ Tam Gün' : h.attendance_status === 'Yarım Gün' ? '½ Yarım Gün' : '✗ Gelmedi'}
+                            </span>
+                          </td>
+
+                          {/* Wage */}
+                          <td className="px-4 py-3.5 text-right text-gray-700 font-bold">
+                            {formatCurrency(h.daily_wage)}
+                          </td>
+
+                          {/* Paid Amount */}
+                          <td className="px-4 py-3.5 text-right font-black">
+                            <span
+                              className={
+                                isFull
+                                  ? 'text-emerald-600'
+                                  : isPartial
+                                  ? 'text-blue-600'
+                                  : 'text-gray-400'
+                              }
+                            >
+                              {h.paid_amount > 0 ? `+${formatCurrency(h.paid_amount)}` : '₺0,00'}
+                            </span>
+                          </td>
+
+                          {/* Remaining Due */}
+                          <td className="px-4 py-3.5 text-right font-extrabold">
+                            <span className={h.remaining_due > 0 ? 'text-rose-600' : 'text-emerald-600'}>
+                              {h.remaining_due > 0 ? formatCurrency(h.remaining_due) : '—'}
+                            </span>
+                          </td>
+
+                          {/* Account */}
+                          <td className="px-4 py-3.5">
+                            {h.account_name ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-100">
+                                🏦 {h.account_name}
+                              </span>
+                            ) : h.paid_amount > 0 ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-purple-50 text-purple-700 border border-purple-100">
+                                💵 Elden / Harici
+                              </span>
+                            ) : (
+                              <span className="text-gray-400 text-xs italic">— Ödenmedi —</span>
+                            )}
+                          </td>
+
+                          {/* Note / Description */}
+                          <td className="px-5 py-3.5 text-gray-600 max-w-[260px] truncate">
+                            {h.transaction_description || h.note || '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Employee Add/Edit Modal */}
       <Modal
         isOpen={empModalOpen}
@@ -1695,6 +2108,7 @@ export default function SalariesPage() {
             fetchAccounts();
             if (activeTab === 'attendance') fetchAttendance(selectedDate);
             if (activeTab === 'summary') fetchMonthlySummary(selectedMonth);
+            if (activeTab === 'history') fetchSalaryHistory();
           }}
           onSelectDateForAttendance={(date) => {
             setSelectedDate(date);
