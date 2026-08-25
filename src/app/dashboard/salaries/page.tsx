@@ -1,3 +1,4 @@
+// src/app/dashboard/salaries/page.tsx
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
@@ -111,6 +112,19 @@ export default function SalariesPage() {
   const [empError, setEmpError] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
 
+  // Pay Due Modal state (borç kapatma)
+  const [payDueModalOpen, setPayDueModalOpen] = useState(false);
+  const [payDueEmployee, setPayDueEmployee] = useState<Employee | null>(null);
+  const [payDueForm, setPayDueForm] = useState({
+    amount: '',
+    account_id: '',
+    date: todayStr,
+    note: '',
+  });
+  const [payDueSubmitting, setPayDueSubmitting] = useState(false);
+  const [payDueError, setPayDueError] = useState('');
+  const [payDueSuccess, setPayDueSuccess] = useState('');
+
   // Monthly summary state
   const currentMonthStr = new Date().toISOString().slice(0, 7);
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
@@ -202,10 +216,12 @@ export default function SalariesPage() {
     onAccountUpdated: () => fetchAccounts(),
     onTransactionCreated: () => {
       fetchAccounts();
+      fetchEmployees();
       if (activeTab === 'summary') fetchMonthlySummary(selectedMonth);
     },
     onTransactionDeleted: () => {
       fetchAccounts();
+      fetchEmployees();
       if (activeTab === 'summary') fetchMonthlySummary(selectedMonth);
     },
   });
@@ -403,6 +419,7 @@ export default function SalariesPage() {
       setSaveSuccessMessage('Yoklama ve ödeme kayıtları başarıyla kaydedildi.');
       fetchAttendance(selectedDate);
       fetchAccounts();
+      fetchEmployees();
 
       setTimeout(() => {
         setSaveSuccessMessage('');
@@ -481,6 +498,71 @@ export default function SalariesPage() {
       console.error('Delete employee error:', err);
     } finally {
       setDeleteConfirm(null);
+    }
+  };
+
+  // Pay Due Modal Open & Submit
+  const openPayDueModal = (emp: Employee) => {
+    setPayDueEmployee(emp);
+    setPayDueForm({
+      amount: emp.balance_due > 0 ? String(emp.balance_due) : '',
+      account_id: accounts.length > 0 ? String(accounts[0].id) : '',
+      date: todayStr,
+      note: 'Maaş borç kapatma',
+    });
+    setPayDueError('');
+    setPayDueSuccess('');
+    setPayDueModalOpen(true);
+  };
+
+  const handlePayDueSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!payDueEmployee) return;
+
+    const amt = parseFloat(payDueForm.amount);
+    if (!amt || amt <= 0) {
+      setPayDueError('Geçerli bir ödeme tutarı giriniz.');
+      return;
+    }
+
+    setPayDueSubmitting(true);
+    setPayDueError('');
+    setPayDueSuccess('');
+
+    try {
+      const res = await fetch('/api/salaries/pay-due', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employee_id: payDueEmployee.id,
+          amount: amt,
+          account_id: payDueForm.account_id ? Number(payDueForm.account_id) : null,
+          date: payDueForm.date,
+          note: payDueForm.note,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setPayDueError(data.error || 'Ödeme gerçekleştirilemedi.');
+        return;
+      }
+
+      setPayDueSuccess(data.message || 'Ödeme başarıyla kaydedildi.');
+      fetchEmployees();
+      fetchAccounts();
+      if (activeTab === 'attendance') fetchAttendance(selectedDate);
+      if (activeTab === 'summary') fetchMonthlySummary(selectedMonth);
+
+      setTimeout(() => {
+        setPayDueModalOpen(false);
+        setPayDueEmployee(null);
+        setPayDueSuccess('');
+      }, 1800);
+    } catch {
+      setPayDueError('Sunucu hatası oluştu.');
+    } finally {
+      setPayDueSubmitting(false);
     }
   };
 
@@ -1096,22 +1178,35 @@ export default function SalariesPage() {
                       <p className="font-semibold text-gray-800">{formatCurrency(emp.total_earned)}</p>
                     </div>
                     <div>
-                      <span className="text-gray-400 text-[11px]">Kalan Alacak</span>
+                      <span className="text-gray-400 text-[11px]">Kalan Borç</span>
                       <p className={`font-bold ${emp.balance_due > 0 ? 'text-danger-600' : 'text-success-600'}`}>
                         {formatCurrency(emp.balance_due)}
                       </p>
                     </div>
                   </div>
 
-                  {/* Card Actions */}
-                  <div className="pt-2 border-t border-gray-100 flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
+                  {/* Card Actions (Borç Öde, Takvim, Düzenle, Sil) */}
+                  <div className="pt-2 border-t border-gray-100 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        onClick={() => openPayDueModal(emp)}
+                        className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                          emp.balance_due > 0
+                            ? 'text-white bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 shadow-sm shadow-emerald-500/20'
+                            : 'text-gray-600 bg-gray-100 hover:bg-gray-200'
+                        }`}
+                        title="En geçmiş borçtan başlayarak takvimden düş"
+                      >
+                        <span>⚡</span> Borç Öde
+                      </button>
+
                       <button
                         onClick={() => setCalendarEmployee(emp)}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-primary-700 bg-primary-50 hover:bg-primary-100 transition-colors"
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-primary-700 bg-primary-50 hover:bg-primary-100 transition-colors"
                       >
-                        📅 Takvim Gör
+                        📅 Takvim
                       </button>
+
                       <button
                         onClick={() => openEditEmployeeModal(emp)}
                         className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-gray-600 hover:bg-gray-100 transition-colors"
@@ -1387,6 +1482,122 @@ export default function SalariesPage() {
         </form>
       </Modal>
 
+      {/* Pay Due (Borç Kapatma) Modal */}
+      <Modal
+        isOpen={payDueModalOpen}
+        onClose={() => {
+          setPayDueModalOpen(false);
+          setPayDueEmployee(null);
+          setPayDueError('');
+          setPayDueSuccess('');
+        }}
+        title={`Borç Kapat / Toplu Ödeme — ${payDueEmployee?.first_name} ${payDueEmployee?.last_name}`}
+        size="sm"
+      >
+        <form onSubmit={handlePayDueSubmit} className="space-y-4">
+          {payDueError && (
+            <div className="p-3 rounded-xl bg-danger-50 text-danger-700 text-xs font-semibold">
+              {payDueError}
+            </div>
+          )}
+          {payDueSuccess && (
+            <div className="p-3 rounded-xl bg-emerald-50 text-emerald-800 text-xs font-semibold">
+              ✓ {payDueSuccess}
+            </div>
+          )}
+
+          {/* Employee Due Info Banner */}
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900 flex items-center justify-between">
+            <div>
+              <p className="font-semibold text-gray-600">Toplam Kalan Borç:</p>
+              <p className="text-xl font-black text-rose-600 mt-0.5">
+                {formatCurrency(payDueEmployee?.balance_due || 0)}
+              </p>
+            </div>
+            <div className="text-right text-[11px] text-amber-800 font-medium max-w-[150px]">
+              * Ödeme en eski tarihteki borçtan başlanarak takvimden düşülecektir.
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1.5">Ödenecek Tutar (₺) *</label>
+            <input
+              type="number"
+              min="1"
+              step="10"
+              required
+              value={payDueForm.amount}
+              onChange={(e) => setPayDueForm({ ...payDueForm, amount: e.target.value })}
+              placeholder="Örn: 2500"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-base font-bold text-gray-900 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1.5">Ödemenin Yapılacağı Kasa</label>
+            <select
+              value={payDueForm.account_id}
+              onChange={(e) => setPayDueForm({ ...payDueForm, account_id: e.target.value })}
+              className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 text-xs font-semibold text-gray-900 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+            >
+              <option value="">— Kasa Seçilmedi (Harici / Elden) —</option>
+              {accounts.map((acc) => (
+                <option key={acc.id} value={acc.id}>
+                  {acc.name} ({formatCurrency(acc.balance)})
+                </option>
+              ))}
+            </select>
+            <p className="text-[10px] text-gray-400 mt-1">
+              Kasa seçilirse tutar kasadan otomatik gider olarak düşülür.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1.5">İşlem Tarihi</label>
+            <input
+              type="date"
+              value={payDueForm.date}
+              onChange={(e) => setPayDueForm({ ...payDueForm, date: e.target.value })}
+              className="w-full px-3.5 py-2 rounded-xl border border-gray-200 text-xs font-semibold text-gray-900 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1.5">Açıklama (İsteğe Bağlı)</label>
+            <input
+              type="text"
+              value={payDueForm.note}
+              onChange={(e) => setPayDueForm({ ...payDueForm, note: e.target.value })}
+              placeholder="Örn: Haftalık avans ödemesi"
+              className="w-full px-3.5 py-2 rounded-xl border border-gray-200 text-xs text-gray-900 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+            />
+          </div>
+
+          <div className="pt-3 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setPayDueModalOpen(false);
+                setPayDueEmployee(null);
+                setPayDueError('');
+                setPayDueSuccess('');
+              }}
+              className="flex-1 py-2.5 rounded-xl text-xs font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200"
+            >
+              İptal
+            </button>
+            <button
+              type="submit"
+              disabled={payDueSubmitting}
+              className="flex-1 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 shadow-md shadow-emerald-500/25 disabled:opacity-50"
+            >
+              {payDueSubmitting ? 'İşleniyor...' : 'Ödemeyi Yap'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
       {/* Employee Attendance Calendar Modal */}
       {calendarEmployee && (
         <EmployeeCalendarModal
@@ -1397,9 +1608,9 @@ export default function SalariesPage() {
             setSelectedDate(date);
             setActiveTab('attendance');
           }}
+          onOpenPayDue={(emp) => openPayDueModal(emp)}
         />
       )}
     </div>
   );
 }
-

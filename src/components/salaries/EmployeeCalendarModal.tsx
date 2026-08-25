@@ -4,12 +4,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Modal from '@/components/ui/Modal';
 
-interface Employee {
+export interface Employee {
   id: number;
   first_name: string;
   last_name: string;
   daily_wage: number;
-  phone?: string | null;
+  phone: string | null;
+  is_active: number;
+  created_at: string;
+  total_days_worked: number;
+  total_earned: number;
+  total_paid: number;
+  balance_due: number;
 }
 
 interface CalendarRecord {
@@ -30,6 +36,7 @@ interface EmployeeCalendarModalProps {
   onClose: () => void;
   employee: Employee | null;
   onSelectDateForAttendance?: (date: string) => void;
+  onOpenPayDue?: (employee: Employee) => void;
 }
 
 function formatCurrency(amount: number, currency: string = 'TRY') {
@@ -50,6 +57,7 @@ export default function EmployeeCalendarModal({
   onClose,
   employee,
   onSelectDateForAttendance,
+  onOpenPayDue,
 }: EmployeeCalendarModalProps) {
   const currentMonthStr = new Date().toISOString().slice(0, 7); // YYYY-MM
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
@@ -179,25 +187,40 @@ export default function EmployeeCalendarModal({
             </div>
           </div>
 
-          {/* Month Switcher */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handlePrevMonth}
-              className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-100 text-gray-600 transition-colors shadow-sm"
-              title="Önceki Ay"
-            >
-              ◀
-            </button>
-            <div className="px-4 py-2 rounded-xl bg-white border border-gray-200 font-bold text-sm text-gray-900 shadow-sm text-center min-w-[140px]">
-              {monthTitle}
+          {/* Actions & Month Switcher */}
+          <div className="flex flex-wrap items-center gap-2">
+            {onOpenPayDue && (
+              <button
+                onClick={() => {
+                  onOpenPayDue(employee);
+                  onClose();
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 shadow-sm shadow-emerald-500/25 transition-all"
+                title="Geçmişten başlayarak borç ödemesi yap"
+              >
+                <span>⚡</span> Borç Öde / Kapat
+              </button>
+            )}
+
+            <div className="flex items-center gap-1">
+              <button
+                onClick={handlePrevMonth}
+                className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-100 text-gray-600 transition-colors shadow-sm"
+                title="Önceki Ay"
+              >
+                ◀
+              </button>
+              <div className="px-3.5 py-2 rounded-xl bg-white border border-gray-200 font-bold text-xs sm:text-sm text-gray-900 shadow-sm text-center min-w-[130px]">
+                {monthTitle}
+              </div>
+              <button
+                onClick={handleNextMonth}
+                className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-100 text-gray-600 transition-colors shadow-sm"
+                title="Sonraki Ay"
+              >
+                ▶
+              </button>
             </div>
-            <button
-              onClick={handleNextMonth}
-              className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-100 text-gray-600 transition-colors shadow-sm"
-              title="Sonraki Ay"
-            >
-              ▶
-            </button>
           </div>
         </div>
 

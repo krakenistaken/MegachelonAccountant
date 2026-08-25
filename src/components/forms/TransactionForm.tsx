@@ -21,13 +21,6 @@ interface Currency {
   symbol: string;
 }
 
-interface TransactionFormProps {
-  onSubmit: (data: TransactionFormData) => Promise<void>;
-  onCancel: () => void;
-  loading?: boolean;
-  defaultAccountId?: number;
-}
-
 export interface TransactionFormData {
   type: 'Gelir' | 'Gider';
   category_id: number;
@@ -38,16 +31,40 @@ export interface TransactionFormData {
   description: string;
 }
 
-export default function TransactionForm({ onSubmit, onCancel, loading, defaultAccountId }: TransactionFormProps) {
-  const [type, setType] = useState<'Gelir' | 'Gider'>('Gider');
-  const [categoryId, setCategoryId] = useState<number>(0);
-  const [accountId, setAccountId] = useState<number>(defaultAccountId || 0);
-  const [currency, setCurrency] = useState('TRY');
-  const [amount, setAmount] = useState('');
-  const [transactionDate, setTransactionDate] = useState(
-    new Date().toISOString().split('T')[0]
+interface TransactionFormProps {
+  onSubmit: (data: TransactionFormData) => Promise<void>;
+  onCancel: () => void;
+  loading?: boolean;
+  defaultAccountId?: number;
+  initialData?: Partial<TransactionFormData> | null;
+}
+
+export default function TransactionForm({
+  onSubmit,
+  onCancel,
+  loading,
+  defaultAccountId,
+  initialData,
+}: TransactionFormProps) {
+  const [type, setType] = useState<'Gelir' | 'Gider'>(
+    initialData?.type || 'Gider'
   );
-  const [description, setDescription] = useState('');
+  const [categoryId, setCategoryId] = useState<number>(
+    initialData?.category_id || 0
+  );
+  const [accountId, setAccountId] = useState<number>(
+    initialData?.account_id || defaultAccountId || 0
+  );
+  const [currency, setCurrency] = useState(initialData?.currency || 'TRY');
+  const [amount, setAmount] = useState(
+    initialData?.amount !== undefined ? String(initialData.amount) : ''
+  );
+  const [transactionDate, setTransactionDate] = useState(
+    initialData?.transaction_date || new Date().toISOString().split('T')[0]
+  );
+  const [description, setDescription] = useState(
+    initialData?.description || ''
+  );
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -61,20 +78,30 @@ export default function TransactionForm({ onSubmit, onCancel, loading, defaultAc
       fetch('/api/accounts').then((r) => r.json()),
       fetch('/api/currencies').then((r) => r.json()),
     ]).then(([catData, accData, curData]) => {
-      setCategories(catData.categories || []);
-      setAccounts(accData.accounts || []);
-      setCurrencies(curData.currencies || []);
+      const catList: Category[] = catData.categories || [];
+      const accList: Account[] = accData.accounts || [];
+      const curList: Currency[] = curData.currencies || [];
 
-      // Set defaults
-      const firstCat = (catData.categories || []).find((c: Category) => c.type === 'Gider');
-      if (firstCat) setCategoryId(firstCat.id);
-      if (defaultAccountId) {
-        setAccountId(defaultAccountId);
-      } else if ((accData.accounts || []).length > 0) {
-        setAccountId(accData.accounts[0].id);
+      setCategories(catList);
+      setAccounts(accList);
+      setCurrencies(curList);
+
+      // If categoryId is not set yet
+      if (!initialData?.category_id) {
+        const firstCat = catList.find((c: Category) => c.type === (initialData?.type || 'Gider'));
+        if (firstCat) setCategoryId(firstCat.id);
+      }
+
+      // If accountId is not set yet
+      if (!initialData?.account_id) {
+        if (defaultAccountId) {
+          setAccountId(defaultAccountId);
+        } else if (accList.length > 0) {
+          setAccountId(accList[0].id);
+        }
       }
     });
-  }, [defaultAccountId]);
+  }, [defaultAccountId, initialData]);
 
   // Filter categories by type
   const filteredCategories = categories.filter((c) => c.type === type);
@@ -191,7 +218,7 @@ export default function TransactionForm({ onSubmit, onCancel, loading, defaultAc
       <div>
         <label className="block text-sm font-semibold text-gray-700 mb-2">Kategori</label>
         <select
-          value={categoryId}
+          value={categoryId || effectiveCategoryId}
           onChange={(e) => setCategoryId(Number(e.target.value))}
           className="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-gray-900
             focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
@@ -219,7 +246,7 @@ export default function TransactionForm({ onSubmit, onCancel, loading, defaultAc
           <option value={0} disabled>Kasa seçin...</option>
           {accounts.map((a) => (
             <option key={a.id} value={a.id}>
-              {a.name}
+              {a.name} ({a.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺)
             </option>
           ))}
         </select>
@@ -271,7 +298,7 @@ export default function TransactionForm({ onSubmit, onCancel, loading, defaultAc
             shadow-md shadow-primary-500/25
             transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {loading ? 'Kaydediliyor...' : 'Kaydet'}
+          {loading ? 'Kaydediliyor...' : initialData ? 'Değişiklikleri Kaydet' : 'Kaydet'}
         </button>
       </div>
     </form>

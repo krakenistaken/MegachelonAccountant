@@ -20,6 +20,8 @@ interface Transaction {
   currency: string;
   transaction_date: string;
   description: string;
+  category_id?: number;
+  account_id?: number;
   category_name: string;
   account_name: string;
   created_by: string;
@@ -35,17 +37,35 @@ function formatCurrency(amount: number, currency: string = 'TRY') {
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Add account modal
   const [modalOpen, setModalOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+
+  // Edit account modal
+  const [editAccountModalOpen, setEditAccountModalOpen] = useState(false);
+  const [accountToEdit, setAccountToEdit] = useState<Account | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [editError, setEditError] = useState('');
+
+  // Delete account confirm modal
+  const [deleteAccountModalOpen, setDeleteAccountModalOpen] = useState(false);
+  const [accountToDelete, setAccountToDelete] = useState<Account | null>(null);
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+  const [deleteAccountError, setDeleteAccountError] = useState('');
 
   // Selected account state for viewing transaction history
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [accountTransactions, setAccountTransactions] = useState<Transaction[]>([]);
   const [loadingTransactions, setLoadingTransactions] = useState(false);
   const [filterType, setFilterType] = useState<string>('');
+
+  // Transaction modals (Add & Edit)
   const [txModalOpen, setTxModalOpen] = useState(false);
+  const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [txSubmitting, setTxSubmitting] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
 
@@ -120,7 +140,6 @@ export default function AccountsPage() {
     } else {
       setSelectedAccountId(account.id);
       setFilterType('');
-      // Smooth scroll to details
       setTimeout(() => {
         detailSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 100);
@@ -153,19 +172,95 @@ export default function AccountsPage() {
     }
   };
 
-  const handleCreateTransaction = async (formData: TransactionFormData) => {
+  // Edit Account
+  const openEditAccount = (e: React.MouseEvent, acc: Account) => {
+    e.stopPropagation();
+    setAccountToEdit(acc);
+    setEditName(acc.name);
+    setEditError('');
+    setEditAccountModalOpen(true);
+  };
+
+  const handleEditAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!accountToEdit) return;
+    setEditError('');
+    setEditSubmitting(true);
+
+    try {
+      const res = await fetch(`/api/accounts/${accountToEdit.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: editName }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setEditError(data.error || 'Kasa güncellenemedi.');
+        return;
+      }
+      setEditAccountModalOpen(false);
+      setAccountToEdit(null);
+      fetchAccounts();
+    } catch {
+      setEditError('Sunucu hatası.');
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
+
+  // Delete Account
+  const openDeleteAccount = (e: React.MouseEvent, acc: Account) => {
+    e.stopPropagation();
+    setAccountToDelete(acc);
+    setDeleteAccountError('');
+    setDeleteAccountModalOpen(true);
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!accountToDelete) return;
+    setDeleteAccountError('');
+    setDeleteSubmitting(true);
+
+    try {
+      const res = await fetch(`/api/accounts/${accountToDelete.id}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setDeleteAccountError(data.error || 'Kasa silinemedi.');
+        return;
+      }
+      setDeleteAccountModalOpen(false);
+      if (selectedAccountId === accountToDelete.id) {
+        setSelectedAccountId(null);
+      }
+      setAccountToDelete(null);
+      fetchAccounts();
+    } catch {
+      setDeleteAccountError('Sunucu hatası oluştu.');
+    } finally {
+      setDeleteSubmitting(false);
+    }
+  };
+
+  // Add / Edit Transaction in selected account
+  const handleSaveTransaction = async (formData: TransactionFormData) => {
     setTxSubmitting(true);
     try {
-      const res = await fetch('/api/transactions', {
-        method: 'POST',
+      const url = editingTx ? `/api/transactions/${editingTx.id}` : '/api/transactions';
+      const method = editingTx ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
       });
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.error || 'İşlem eklenemedi.');
+        throw new Error(data.error || 'İşlem kaydedilemedi.');
       }
       setTxModalOpen(false);
+      setEditingTx(null);
       fetchAccounts();
       if (selectedAccount) fetchAccountTransactions(selectedAccount.id, filterType);
     } catch (err) {
@@ -210,7 +305,7 @@ export default function AccountsPage() {
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Kasalar</h1>
           <p className="text-gray-500 mt-1 text-sm">
-            Kasa hesaplarınızı yönetin ve geçmiş hareketlerini inceleyin
+            Kasa hesaplarınızı ekleyin, düzenleyin, silin ve geçmiş hareketlerini inceleyin
           </p>
         </div>
         <button
@@ -232,7 +327,7 @@ export default function AccountsPage() {
         <p className="text-primary-100 text-sm font-medium mb-1">Toplam Kasa Bakiyesi</p>
         <p className="text-3xl sm:text-4xl font-bold">{formatCurrency(totalBalance)}</p>
         <p className="text-primary-200 text-sm mt-2">
-          {accounts.length} kasa hesabı · İşlem geçmişini görmek için bir kasaya tıklayın
+          {accounts.length} kasa hesabı · Hareketleri görmek için bir kasaya tıklayınız
         </p>
       </div>
 
@@ -274,16 +369,6 @@ export default function AccountsPage() {
                     }
                   `}
                 >
-                  {/* Top indicator badge */}
-                  {isSelected && (
-                    <div className="absolute top-4 right-4">
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-primary-500 text-white shadow-sm">
-                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                        Seçili Kasa
-                      </span>
-                    </div>
-                  )}
-
                   <div className="flex items-start justify-between mb-4">
                     <div
                       className={`w-11 h-11 rounded-xl flex items-center justify-center transition-transform group-hover:scale-110 duration-300 ${
@@ -295,6 +380,28 @@ export default function AccountsPage() {
                       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 0 0-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 0 1-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 0 0 3 15h-.75M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm3 0h.008v.008H18V10.5Zm-12 0h.008v.008H6V10.5Z" />
                       </svg>
+                    </div>
+
+                    {/* Action buttons on card (Edit / Delete) */}
+                    <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => openEditAccount(e, account)}
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors"
+                        title="Kasayı Düzenle"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={(e) => openDeleteAccount(e, account)}
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-danger-500 hover:bg-danger-50 transition-colors"
+                        title="Kasayı Sil"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                        </svg>
+                      </button>
                     </div>
                   </div>
 
@@ -345,7 +452,10 @@ export default function AccountsPage() {
 
             <div className="flex flex-wrap items-center gap-2">
               <button
-                onClick={() => setTxModalOpen(true)}
+                onClick={() => {
+                  setEditingTx(null);
+                  setTxModalOpen(true);
+                }}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold text-white
                   bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700
                   shadow-md shadow-primary-500/20 transition-all"
@@ -354,6 +464,20 @@ export default function AccountsPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
                 </svg>
                 Bu Kasaya İşlem Ekle
+              </button>
+
+              <button
+                onClick={(e) => openEditAccount(e, selectedAccount)}
+                className="px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 transition-all"
+              >
+                Kasayı Düzenle
+              </button>
+
+              <button
+                onClick={(e) => openDeleteAccount(e, selectedAccount)}
+                className="px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 transition-all"
+              >
+                Kasayı Sil
               </button>
 
               <button
@@ -479,7 +603,7 @@ export default function AccountsPage() {
                       <th className="text-right px-5 py-3">Tutar</th>
                       <th className="text-left px-5 py-3">Tarih</th>
                       <th className="text-left px-5 py-3">Açıklama</th>
-                      <th className="text-right px-5 py-3"></th>
+                      <th className="text-right px-5 py-3">İşlemler</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -531,15 +655,29 @@ export default function AccountsPage() {
                               </button>
                             </div>
                           ) : (
-                            <button
-                              onClick={() => setDeleteConfirm(tx.id)}
-                              className="p-1.5 rounded-lg text-gray-400 hover:text-danger-500 hover:bg-danger-50 transition-all"
-                              title="İşlemi Sil"
-                            >
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                              </svg>
-                            </button>
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                onClick={() => {
+                                  setEditingTx(tx);
+                                  setTxModalOpen(true);
+                                }}
+                                className="p-1.5 rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-all"
+                                title="İşlemi Düzenle"
+                              >
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+                                </svg>
+                              </button>
+                              <button
+                                onClick={() => setDeleteConfirm(tx.id)}
+                                className="p-1.5 rounded-lg text-gray-400 hover:text-danger-500 hover:bg-danger-50 transition-all"
+                                title="İşlemi Sil"
+                              >
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                                </svg>
+                              </button>
+                            </div>
                           )}
                         </td>
                       </tr>
@@ -594,14 +732,29 @@ export default function AccountsPage() {
                           </button>
                         </div>
                       ) : (
-                        <button
-                          onClick={() => setDeleteConfirm(tx.id)}
-                          className="p-1 text-gray-400 hover:text-danger-500"
-                        >
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                          </svg>
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => {
+                              setEditingTx(tx);
+                              setTxModalOpen(true);
+                            }}
+                            className="p-1 text-gray-400 hover:text-primary-600"
+                            title="Düzenle"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirm(tx.id)}
+                            className="p-1 text-gray-400 hover:text-danger-500"
+                            title="Sil"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                            </svg>
+                          </button>
+                        </div>
                       )}
                     </div>
 
@@ -655,18 +808,136 @@ export default function AccountsPage() {
         </form>
       </Modal>
 
-      {/* Add transaction for selected account modal */}
+      {/* Edit account modal */}
+      <Modal
+        isOpen={editAccountModalOpen}
+        onClose={() => {
+          setEditAccountModalOpen(false);
+          setAccountToEdit(null);
+          setEditError('');
+        }}
+        title="Kasa Adını Düzenle"
+        size="sm"
+      >
+        <form onSubmit={handleEditAccount} className="space-y-5">
+          {editError && (
+            <div className="px-4 py-3 rounded-xl bg-danger-50 text-danger-700 text-sm font-medium">{editError}</div>
+          )}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Yeni Kasa Adı</label>
+            <input
+              type="text"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              placeholder="Örn: Ana Kasa"
+              required
+              className="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-gray-900
+                focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+            />
+          </div>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setEditAccountModalOpen(false);
+                setAccountToEdit(null);
+                setEditError('');
+              }}
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-all"
+            >
+              İptal
+            </button>
+            <button
+              type="submit"
+              disabled={editSubmitting}
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white
+                bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700
+                shadow-md shadow-primary-500/25 transition-all disabled:opacity-50"
+            >
+              {editSubmitting ? 'Kaydediliyor...' : 'Güncelle'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Delete account confirmation modal */}
+      <Modal
+        isOpen={deleteAccountModalOpen}
+        onClose={() => {
+          setDeleteAccountModalOpen(false);
+          setAccountToDelete(null);
+          setDeleteAccountError('');
+        }}
+        title="Kasayı Sil"
+        size="sm"
+      >
+        <div className="space-y-4">
+          {deleteAccountError ? (
+            <div className="p-3 rounded-xl bg-danger-50 text-danger-700 text-xs font-semibold">
+              {deleteAccountError}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-600">
+              <strong className="text-gray-900 font-bold">&quot;{accountToDelete?.name}&quot;</strong> kasasını silmek istediğinize emin misiniz?
+            </p>
+          )}
+
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                setDeleteAccountModalOpen(false);
+                setAccountToDelete(null);
+                setDeleteAccountError('');
+              }}
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-all"
+            >
+              İptal
+            </button>
+            <button
+              type="button"
+              onClick={handleDeleteAccount}
+              disabled={deleteSubmitting}
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white bg-danger-600 hover:bg-danger-700 shadow-md shadow-danger-600/25 transition-all disabled:opacity-50"
+            >
+              {deleteSubmitting ? 'Siliniyor...' : 'Evet, Sil'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Add / Edit transaction for selected account modal */}
       {selectedAccount && (
         <Modal
           isOpen={txModalOpen}
-          onClose={() => setTxModalOpen(false)}
-          title={`"${selectedAccount.name}" Kasasına İşlem Ekle`}
+          onClose={() => {
+            setTxModalOpen(false);
+            setEditingTx(null);
+          }}
+          title={editingTx ? 'İşlemi Düzenle' : `"${selectedAccount.name}" Kasasına İşlem Ekle`}
         >
           <TransactionForm
-            onSubmit={handleCreateTransaction}
-            onCancel={() => setTxModalOpen(false)}
+            key={editingTx ? `edit-${editingTx.id}` : `new-${selectedAccount.id}`}
+            onSubmit={handleSaveTransaction}
+            onCancel={() => {
+              setTxModalOpen(false);
+              setEditingTx(null);
+            }}
             loading={txSubmitting}
             defaultAccountId={selectedAccount.id}
+            initialData={
+              editingTx
+                ? {
+                    type: editingTx.type as 'Gelir' | 'Gider',
+                    category_id: editingTx.category_id,
+                    account_id: editingTx.account_id || selectedAccount.id,
+                    currency: editingTx.currency,
+                    amount: editingTx.amount,
+                    transaction_date: editingTx.transaction_date,
+                    description: editingTx.description || '',
+                  }
+                : null
+            }
           />
         </Modal>
       )}

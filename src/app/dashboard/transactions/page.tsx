@@ -14,6 +14,8 @@ interface Transaction {
   currency: string;
   transaction_date: string;
   description: string;
+  category_id?: number;
+  account_id?: number;
   category_name: string;
   account_name: string;
   created_by: string;
@@ -30,6 +32,7 @@ export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [filterType, setFilterType] = useState<string>('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
@@ -73,19 +76,35 @@ export default function TransactionsPage() {
     );
   };
 
-  const handleCreate = async (formData: TransactionFormData) => {
+  const openNewModal = () => {
+    setEditingTransaction(null);
+    setModalOpen(true);
+  };
+
+  const openEditModal = (tx: Transaction) => {
+    setEditingTransaction(tx);
+    setModalOpen(true);
+  };
+
+  const handleSave = async (formData: TransactionFormData) => {
     setSubmitting(true);
     try {
-      const res = await fetch('/api/transactions', {
-        method: 'POST',
+      const url = editingTransaction ? `/api/transactions/${editingTransaction.id}` : '/api/transactions';
+      const method = editingTransaction ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
       });
+
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.error || 'İşlem eklenemedi.');
+        throw new Error(data.error || 'İşlem kaydedilemedi.');
       }
       setModalOpen(false);
+      setEditingTransaction(null);
+      fetchTransactions();
     } catch (err) {
       throw err;
     } finally {
@@ -99,6 +118,8 @@ export default function TransactionsPage() {
       if (!res.ok) {
         const data = await res.json();
         console.error('Delete error:', data.error);
+      } else {
+        fetchTransactions();
       }
     } catch (err) {
       console.error('Delete error:', err);
@@ -114,12 +135,12 @@ export default function TransactionsPage() {
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">İşlemler</h1>
           <p className="text-gray-500 mt-1 text-sm">
-            Tüm gelir ve gider işlemlerinizi yönetin ve dışa aktarın
+            Tüm gelir ve gider işlemlerinizi yönetin, düzenleyin ve dışa aktarın
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setModalOpen(true)}
+            onClick={openNewModal}
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white
               bg-gradient-to-r from-primary-500 to-primary-600
               hover:from-primary-600 hover:to-primary-700
@@ -213,7 +234,7 @@ export default function TransactionsPage() {
                     <th className="text-right px-6 py-3.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Tutar</th>
                     <th className="text-left px-6 py-3.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Tarih</th>
                     <th className="text-left px-6 py-3.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Açıklama</th>
-                    <th className="text-right px-6 py-3.5 text-xs font-semibold text-gray-500 uppercase tracking-wider"></th>
+                    <th className="text-right px-6 py-3.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">İşlemler</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
@@ -262,15 +283,26 @@ export default function TransactionsPage() {
                             </button>
                           </div>
                         ) : (
-                          <button
-                            onClick={() => setDeleteConfirm(tx.id)}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-danger-500 hover:bg-danger-50 transition-all opacity-0 group-hover:opacity-100"
-                            style={{ opacity: 1 }}
-                          >
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                            </svg>
-                          </button>
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => openEditModal(tx)}
+                              className="p-1.5 rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-all"
+                              title="İşlemi Düzenle"
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+                              </svg>
+                            </button>
+                            <button
+                              onClick={() => setDeleteConfirm(tx.id)}
+                              className="p-1.5 rounded-lg text-gray-400 hover:text-danger-500 hover:bg-danger-50 transition-all"
+                              title="İşlemi Sil"
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                              </svg>
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -322,14 +354,26 @@ export default function TransactionsPage() {
                         </button>
                       </div>
                     ) : (
-                      <button
-                        onClick={() => setDeleteConfirm(tx.id)}
-                        className="p-1 text-gray-400 hover:text-danger-500"
-                      >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                        </svg>
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => openEditModal(tx)}
+                          className="p-1 text-gray-400 hover:text-primary-600"
+                          title="Düzenle"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={() => setDeleteConfirm(tx.id)}
+                          className="p-1 text-gray-400 hover:text-danger-500"
+                          title="Sil"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                          </svg>
+                        </button>
+                      </div>
                     )}
                   </div>
                   {tx.description && (
@@ -342,11 +386,35 @@ export default function TransactionsPage() {
         )}
       </div>
 
-      {/* Add transaction modal */}
-      <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title="Yeni İşlem Ekle">
+      {/* Add/Edit transaction modal */}
+      <Modal
+        isOpen={modalOpen}
+        onClose={() => {
+          setModalOpen(false);
+          setEditingTransaction(null);
+        }}
+        title={editingTransaction ? 'İşlemi Düzenle' : 'Yeni İşlem Ekle'}
+      >
         <TransactionForm
-          onSubmit={handleCreate}
-          onCancel={() => setModalOpen(false)}
+          key={editingTransaction ? `edit-${editingTransaction.id}` : 'new'}
+          initialData={
+            editingTransaction
+              ? {
+                  type: editingTransaction.type as 'Gelir' | 'Gider',
+                  category_id: editingTransaction.category_id,
+                  account_id: editingTransaction.account_id,
+                  currency: editingTransaction.currency,
+                  amount: editingTransaction.amount,
+                  transaction_date: editingTransaction.transaction_date,
+                  description: editingTransaction.description || '',
+                }
+              : null
+          }
+          onSubmit={handleSave}
+          onCancel={() => {
+            setModalOpen(false);
+            setEditingTransaction(null);
+          }}
           loading={submitting}
         />
       </Modal>
