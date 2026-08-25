@@ -929,7 +929,7 @@ export default function SalariesPage() {
                               <input
                                 type="number"
                                 min="0"
-                                step="10"
+                                step="any"
                                 value={rec.daily_wage}
                                 onChange={(e) => handleWageChange(rec.employee_id, e.target.value)}
                                 className="w-24 px-2.5 py-1.5 rounded-lg border border-gray-200 font-bold text-gray-900 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
@@ -1018,7 +1018,7 @@ export default function SalariesPage() {
                                         type="number"
                                         min="0"
                                         max={rec.daily_wage}
-                                        step="10"
+                                        step="any"
                                         value={rec.paid_amount ?? 0}
                                         onChange={(e) =>
                                           handlePaidAmountChange(rec.employee_id, e.target.value)
@@ -1444,7 +1444,7 @@ export default function SalariesPage() {
               type="number"
               required
               min="0"
-              step="10"
+              step="any"
               value={empForm.daily_wage}
               onChange={(e) => setEmpForm({ ...empForm, daily_wage: e.target.value })}
               placeholder="Örn: 1200"
@@ -1523,8 +1523,8 @@ export default function SalariesPage() {
             <label className="block text-xs font-bold text-gray-700 mb-1.5">Ödenecek Tutar (₺) *</label>
             <input
               type="number"
-              min="1"
-              step="10"
+              min="0.01"
+              step="any"
               required
               value={payDueForm.amount}
               onChange={(e) => setPayDueForm({ ...payDueForm, amount: e.target.value })}
