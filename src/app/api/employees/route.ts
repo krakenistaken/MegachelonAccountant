@@ -13,9 +13,9 @@ export async function GET() {
     const employeesRs = await db.execute(`
       SELECT 
         e.id, e.first_name, e.last_name, e.daily_wage, e.phone, e.is_active, e.created_at,
-        COALESCE(SUM(CASE WHEN a.status = 'Geldi' THEN 1 WHEN a.status = 'Yarım Gün' THEN 0.5 ELSE 0 END), 0) as total_days_worked,
-        COALESCE(SUM(CASE WHEN a.status IN ('Geldi', 'Yarım Gün') THEN a.daily_wage ELSE 0 END), 0) as total_earned,
-        COALESCE(SUM(CASE WHEN a.status IN ('Geldi', 'Yarım Gün') THEN (CASE WHEN a.paid_amount > 0 THEN a.paid_amount WHEN a.is_paid = 1 THEN a.daily_wage ELSE 0 END) ELSE 0 END), 0) as total_paid
+        COALESCE(SUM(CASE WHEN a.status = 'Geldi' THEN 1 WHEN a.status = 'Yarım Gün' THEN 0.5 WHEN a.status = 'Mesai' THEN 1.5 ELSE 0 END), 0) as total_days_worked,
+        COALESCE(SUM(CASE WHEN a.status IN ('Geldi', 'Yarım Gün', 'Mesai') THEN a.daily_wage ELSE 0 END), 0) as total_earned,
+        COALESCE(SUM(CASE WHEN a.status IN ('Geldi', 'Yarım Gün', 'Mesai') THEN (CASE WHEN a.paid_amount > 0 THEN a.paid_amount WHEN a.is_paid = 1 THEN a.daily_wage ELSE 0 END) ELSE 0 END), 0) as total_paid
       FROM employees e
       LEFT JOIN attendances a ON e.id = a.employee_id
       GROUP BY e.id

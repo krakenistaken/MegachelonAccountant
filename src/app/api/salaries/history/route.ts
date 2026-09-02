@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
     } else if (paymentStatusParam === 'partial') {
       whereClauses.push('(a.paid_amount > 0 AND a.paid_amount < a.daily_wage)');
     } else if (paymentStatusParam === 'unpaid') {
-      whereClauses.push('(a.paid_amount = 0 OR a.paid_amount IS NULL) AND a.status IN (\'Geldi\', \'Yarım Gün\')');
+      whereClauses.push('(a.paid_amount = 0 OR a.paid_amount IS NULL) AND a.status IN (\'Geldi\', \'Yarım Gün\', \'Mesai\')');
     }
 
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
@@ -118,7 +118,10 @@ export async function GET(request: NextRequest) {
     const history = rows.map((r) => {
       const dailyWage = Number(r.daily_wage || 0);
       const paidAmount = Number(r.paid_amount || 0);
-      const isWorking = r.attendance_status === 'Geldi' || r.attendance_status === 'Yarım Gün';
+      const isWorking =
+        r.attendance_status === 'Geldi' ||
+        r.attendance_status === 'Yarım Gün' ||
+        r.attendance_status === 'Mesai';
       const remainingDue = isWorking ? Math.max(0, dailyWage - paidAmount) : 0;
 
       let paymentCategory: 'full' | 'partial' | 'unpaid' | 'absent' = 'absent';
@@ -143,7 +146,12 @@ export async function GET(request: NextRequest) {
 
     // Calculate Summary Stats
     const totalWageEarned = history
-      .filter((h) => h.attendance_status === 'Geldi' || h.attendance_status === 'Yarım Gün')
+      .filter(
+        (h) =>
+          h.attendance_status === 'Geldi' ||
+          h.attendance_status === 'Yarım Gün' ||
+          h.attendance_status === 'Mesai'
+      )
       .reduce((sum, h) => sum + h.daily_wage, 0);
 
     const totalPaidAmount = history.reduce((sum, h) => sum + h.paid_amount, 0);

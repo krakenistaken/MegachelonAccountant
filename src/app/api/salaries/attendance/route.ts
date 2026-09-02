@@ -111,13 +111,14 @@ export async function GET(request: NextRequest) {
     const totalEmployees = records.length;
     const presentCount = records.filter((r) => r.status === 'Geldi').length;
     const halfDayCount = records.filter((r) => r.status === 'Yarım Gün').length;
+    const mesaiCount = records.filter((r) => r.status === 'Mesai').length;
     const absentCount = records.filter((r) => r.status === 'Gelmedi').length;
     const unmarkedCount = records.filter((r) => !r.status).length;
     const totalWage = records
-      .filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün')
+      .filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün' || r.status === 'Mesai')
       .reduce((sum, r) => sum + Number(r.daily_wage || 0), 0);
     const paidAmount = records
-      .filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün')
+      .filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün' || r.status === 'Mesai')
       .reduce((sum, r) => sum + Number(r.paid_amount || 0), 0);
     const unpaidAmount = totalWage - paidAmount;
 
@@ -127,6 +128,7 @@ export async function GET(request: NextRequest) {
         totalEmployees,
         presentCount,
         halfDayCount,
+        mesaiCount,
         absentCount,
         unmarkedCount,
         totalWage,
@@ -249,23 +251,33 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      // CASE 2: Status is Geldi, Yarım Gün, or Gelmedi
+      // CASE 2: Status is Geldi, Yarım Gün, Mesai, or Gelmedi
       const defaultWage = Number(emp.daily_wage);
-      const status: 'Geldi' | 'Yarım Gün' | 'Gelmedi' =
-        rawStatus === 'Yarım Gün' ? 'Yarım Gün' : rawStatus === 'Gelmedi' ? 'Gelmedi' : 'Geldi';
+      const status: 'Geldi' | 'Yarım Gün' | 'Mesai' | 'Gelmedi' =
+        rawStatus === 'Yarım Gün'
+          ? 'Yarım Gün'
+          : rawStatus === 'Mesai'
+          ? 'Mesai'
+          : rawStatus === 'Gelmedi'
+          ? 'Gelmedi'
+          : 'Geldi';
 
       let effectiveWage =
         item.daily_wage !== undefined && item.daily_wage !== null
           ? Math.max(0, parseFloat(String(item.daily_wage)))
           : status === 'Yarım Gün'
           ? defaultWage / 2
+          : status === 'Mesai'
+          ? defaultWage * 1.5
           : defaultWage;
 
       // Calculate paid_amount & is_paid
       let paidAmount = 0;
       let isPaid = 0;
 
-      if (status === 'Geldi' || status === 'Yarım Gün') {
+      const isWorkingDay = status === 'Geldi' || status === 'Yarım Gün' || status === 'Mesai';
+
+      if (isWorkingDay) {
         if (item.paid_amount !== undefined && item.paid_amount !== null) {
           paidAmount = Math.max(0, parseFloat(String(item.paid_amount)) || 0);
           isPaid = paidAmount >= effectiveWage && effectiveWage > 0 ? 1 : paidAmount > 0 ? 1 : 0;
@@ -324,8 +336,8 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // If active attendance (Geldi or Yarım Gün) + has paidAmount > 0 + with a chosen account and no active transaction
-      if ((status === 'Geldi' || status === 'Yarım Gün') && paidAmount > 0 && targetAccountId && !transactionId) {
+      // If active attendance (Geldi, Yarım Gün, Mesai) + has paidAmount > 0 + with a chosen account and no active transaction
+      if (isWorkingDay && paidAmount > 0 && targetAccountId && !transactionId) {
         // Verify account exists
         const accRs = await db.execute({
           sql: 'SELECT id FROM accounts WHERE id = ?',
@@ -333,7 +345,8 @@ export async function POST(request: NextRequest) {
         });
         if (accRs.rows.length > 0) {
           const isPartial = paidAmount < effectiveWage;
-          const statusLabel = status === 'Yarım Gün' ? ' (Yarım Gün)' : '';
+          const statusLabel =
+            status === 'Yarım Gün' ? ' (Yarım Gün)' : status === 'Mesai' ? ' (Mesai 1.5x)' : '';
           const txDesc = `Maaş / Yevmiye${statusLabel} (${isPartial ? `Kısmi: ₺${paidAmount}` : 'Tam Ödeme'}): ${emp.first_name} ${emp.last_name} (${date})`;
           const txResult = await db.execute({
             sql: `INSERT INTO transactions (type, category_id, account_id, currency, amount, transaction_date, description, created_by_user_id)

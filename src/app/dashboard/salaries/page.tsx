@@ -35,7 +35,7 @@ interface AttendanceRecord {
   is_active: number;
   attendance_id: number | null;
   date: string | null;
-  status: 'Geldi' | 'Yarım Gün' | 'Gelmedi' | null;
+  status: 'Geldi' | 'Yarım Gün' | 'Mesai' | 'Gelmedi' | null;
   daily_wage: number;
   is_paid: number; // 0 or 1
   paid_amount: number;
@@ -196,7 +196,7 @@ export default function SalariesPage() {
       if (!res.ok) throw new Error(data.error);
       const formattedRecords = (data.records || []).map((r: AttendanceRecord) => ({
         ...r,
-        status: (r.status as 'Geldi' | 'Yarım Gün' | 'Gelmedi' | null) || null,
+        status: (r.status as 'Geldi' | 'Yarım Gün' | 'Mesai' | 'Gelmedi' | null) || null,
         paid_amount:
           r.paid_amount !== undefined && r.paid_amount !== null
             ? r.paid_amount
@@ -326,7 +326,10 @@ export default function SalariesPage() {
   };
 
   // Local record changes
-  const handleStatusChange = (employeeId: number, newStatus: 'Geldi' | 'Yarım Gün' | 'Gelmedi' | null) => {
+  const handleStatusChange = (
+    employeeId: number,
+    newStatus: 'Geldi' | 'Yarım Gün' | 'Mesai' | 'Gelmedi' | null
+  ) => {
     setLocalRecords((prev) =>
       prev.map((rec) => {
         if (rec.employee_id === employeeId) {
@@ -341,6 +344,8 @@ export default function SalariesPage() {
             if (updatedPaidAmount > updatedWage) {
               updatedPaidAmount = updatedWage;
             }
+          } else if (targetStatus === 'Mesai') {
+            updatedWage = rec.default_daily_wage * 1.5;
           } else if (targetStatus === 'Geldi') {
             updatedWage = rec.default_daily_wage;
           } else if (targetStatus === 'Gelmedi' || targetStatus === null) {
@@ -479,8 +484,14 @@ export default function SalariesPage() {
     setLocalRecords((prev) =>
       prev.map((rec) => ({
         ...rec,
-        is_paid: rec.status === 'Geldi' || rec.status === 'Yarım Gün' ? 1 : 0,
-        paid_amount: rec.status === 'Geldi' || rec.status === 'Yarım Gün' ? rec.daily_wage : 0,
+        is_paid:
+          rec.status === 'Geldi' || rec.status === 'Yarım Gün' || rec.status === 'Mesai'
+            ? 1
+            : 0,
+        paid_amount:
+          rec.status === 'Geldi' || rec.status === 'Yarım Gün' || rec.status === 'Mesai'
+            ? rec.daily_wage
+            : 0,
       }))
     );
   };
@@ -505,8 +516,13 @@ export default function SalariesPage() {
         employee_id: r.employee_id,
         status: r.status,
         daily_wage: r.daily_wage,
-        is_paid: (r.status === 'Geldi' || r.status === 'Yarım Gün') && (r.paid_amount || 0) > 0,
-        paid_amount: r.status === 'Geldi' || r.status === 'Yarım Gün' ? (r.paid_amount || 0) : 0,
+        is_paid:
+          (r.status === 'Geldi' || r.status === 'Yarım Gün' || r.status === 'Mesai') &&
+          (r.paid_amount || 0) > 0,
+        paid_amount:
+          r.status === 'Geldi' || r.status === 'Yarım Gün' || r.status === 'Mesai'
+            ? r.paid_amount || 0
+            : 0,
         account_id: r.account_id,
         note: r.note,
       }));
@@ -681,7 +697,7 @@ export default function SalariesPage() {
     const rows = monthlyData.employees.map((e) => ({
       'Çalışan': `${e.first_name} ${e.last_name}`,
       'Günlük Yevmiye (₺)': e.default_daily_wage,
-      'Çalıştığı Gün (Geldi / Yarım)': e.days_attended,
+      'Çalıştığı Gün (Geldi / Yarım / Mesai)': e.days_attended,
       'Gelmeyen Gün': e.days_absent,
       'Toplam Hak Ediş (₺)': e.total_earned,
       'Ödenen Tutar (₺)': e.total_paid,
@@ -824,13 +840,14 @@ export default function SalariesPage() {
   // Local attendance stats calculation
   const currentPresentCount = localRecords.filter((r) => r.status === 'Geldi').length;
   const currentHalfDayCount = localRecords.filter((r) => r.status === 'Yarım Gün').length;
+  const currentMesaiCount = localRecords.filter((r) => r.status === 'Mesai').length;
   const currentAbsentCount = localRecords.filter((r) => r.status === 'Gelmedi').length;
   const currentUnmarkedCount = localRecords.filter((r) => !r.status).length;
   const currentTotalWage = localRecords
-    .filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün')
+    .filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün' || r.status === 'Mesai')
     .reduce((sum, r) => sum + r.daily_wage, 0);
   const currentPaidAmount = localRecords
-    .filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün')
+    .filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün' || r.status === 'Mesai')
     .reduce((sum, r) => sum + (r.paid_amount || 0), 0);
   const currentUnpaidAmount = currentTotalWage - currentPaidAmount;
 
@@ -1013,7 +1030,7 @@ export default function SalariesPage() {
           </div>
 
           {/* Daily Quick Summary Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
             <div className="bg-white rounded-xl border border-gray-100 p-3.5 text-center">
               <p className="text-xs font-medium text-gray-500">Kayıtlı Çalışan</p>
               <p className="text-xl font-bold text-gray-900 mt-1">{localRecords.length}</p>
@@ -1026,12 +1043,16 @@ export default function SalariesPage() {
               <p className="text-xs font-medium text-indigo-700">Yarım Gün</p>
               <p className="text-xl font-bold text-indigo-700 mt-1">{currentHalfDayCount}</p>
             </div>
+            <div className="bg-purple-50 rounded-xl border border-purple-100 p-3.5 text-center">
+              <p className="text-xs font-medium text-purple-700">⚡ Mesai</p>
+              <p className="text-xl font-bold text-purple-700 mt-1">{currentMesaiCount}</p>
+            </div>
             <div className="bg-rose-50 rounded-xl border border-rose-100 p-3.5 text-center">
               <p className="text-xs font-medium text-rose-700">Gelmedi</p>
               <p className="text-xl font-bold text-rose-700 mt-1">{currentAbsentCount}</p>
             </div>
             <div className="bg-gray-50 rounded-xl border border-gray-100 p-3.5 text-center">
-              <p className="text-xs font-medium text-gray-500">Boş / Girilmedi</p>
+              <p className="text-xs font-medium text-gray-500">Boş / Yoklama</p>
               <p className="text-xl font-bold text-gray-500 mt-1">{currentUnmarkedCount}</p>
             </div>
             <div className="bg-emerald-50/70 rounded-xl border border-emerald-100 p-3.5 text-center">
@@ -1039,7 +1060,7 @@ export default function SalariesPage() {
               <p className="text-lg font-bold text-emerald-700 mt-1">{formatCurrency(currentPaidAmount)}</p>
             </div>
             <div className="bg-amber-50 rounded-xl border border-amber-100 p-3.5 text-center">
-              <p className="text-xs font-medium text-amber-700">Bekleyen (Borç)</p>
+              <p className="text-xs font-medium text-amber-700">Bekleyen Borç</p>
               <p className="text-lg font-bold text-amber-700 mt-1">{formatCurrency(currentUnpaidAmount)}</p>
             </div>
           </div>
@@ -1080,7 +1101,8 @@ export default function SalariesPage() {
                     {localRecords.map((rec) => {
                       const isPresent = rec.status === 'Geldi';
                       const isHalfDay = rec.status === 'Yarım Gün';
-                      const isWorkingDay = isPresent || isHalfDay;
+                      const isMesai = rec.status === 'Mesai';
+                      const isWorkingDay = isPresent || isHalfDay || isMesai;
                       const currentPaid = rec.paid_amount !== undefined ? rec.paid_amount : (rec.is_paid === 1 ? rec.daily_wage : 0);
                       const isFullPaid = isWorkingDay && rec.is_paid === 1 && currentPaid >= rec.daily_wage;
                       const isPartialPaid = isWorkingDay && rec.is_paid === 1 && currentPaid > 0 && currentPaid < rec.daily_wage;
@@ -1094,6 +1116,8 @@ export default function SalariesPage() {
                               ? 'bg-white hover:bg-emerald-50/20'
                               : isHalfDay
                               ? 'bg-indigo-50/30 hover:bg-indigo-50/50'
+                              : isMesai
+                              ? 'bg-purple-50/30 hover:bg-purple-50/50'
                               : rec.status === 'Gelmedi'
                               ? 'bg-rose-50/30 hover:bg-rose-50/50'
                               : 'bg-gray-50/30 hover:bg-gray-50'
@@ -1110,7 +1134,9 @@ export default function SalariesPage() {
                               title="Yoklama Takvimini Aç & Gün Gün Düzenle"
                             >
                               <div className={`w-8 h-8 rounded-full font-bold flex items-center justify-center text-xs transition-colors ${
-                                isHalfDay
+                                isMesai
+                                  ? 'bg-purple-100 text-purple-700 group-hover:bg-purple-600 group-hover:text-white'
+                                  : isHalfDay
                                   ? 'bg-indigo-100 text-indigo-700 group-hover:bg-indigo-600 group-hover:text-white'
                                   : 'bg-primary-100 text-primary-700 group-hover:bg-primary-600 group-hover:text-white'
                               }`}>
@@ -1123,7 +1149,12 @@ export default function SalariesPage() {
                                   <span className="text-gray-400 group-hover:text-primary-500 text-xs">📅</span>
                                 </p>
                                 <p className="text-[11px] text-gray-400">
-                                  Varsayılan: {formatCurrency(rec.default_daily_wage)} {isHalfDay ? `(Yarım: ${formatCurrency(rec.default_daily_wage / 2)})` : ''}
+                                  Varsayılan: {formatCurrency(rec.default_daily_wage)}{' '}
+                                  {isHalfDay
+                                    ? `(Yarım: ${formatCurrency(rec.default_daily_wage / 2)})`
+                                    : isMesai
+                                    ? `(Mesai: ${formatCurrency(rec.default_daily_wage * 1.5)})`
+                                    : ''}
                                 </p>
                               </div>
                             </div>
@@ -1169,6 +1200,18 @@ export default function SalariesPage() {
                                 title="Yarım gün (günlük ücretin yarısı yazılır)"
                               >
                                 ½ Yarım
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange(rec.employee_id, 'Mesai')}
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                  rec.status === 'Mesai'
+                                    ? 'bg-purple-600 text-white shadow-sm'
+                                    : 'text-gray-500 hover:text-gray-800'
+                                }`}
+                                title={`Mesai (günlük ücretin 1.5 katı: ${formatCurrency(rec.default_daily_wage * 1.5)})`}
+                              >
+                                ⚡ Mesai
                               </button>
                               <button
                                 type="button"
@@ -1834,10 +1877,18 @@ export default function SalariesPage() {
                                   ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                   : h.attendance_status === 'Yarım Gün'
                                   ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                  : h.attendance_status === 'Mesai'
+                                  ? 'bg-purple-50 text-purple-700 border border-purple-200'
                                   : 'bg-rose-50 text-rose-700 border border-rose-200'
                               }`}
                             >
-                              {h.attendance_status === 'Geldi' ? '✓ Tam Gün' : h.attendance_status === 'Yarım Gün' ? '½ Yarım Gün' : '✗ Gelmedi'}
+                              {h.attendance_status === 'Geldi'
+                                ? '✓ Tam Gün'
+                                : h.attendance_status === 'Yarım Gün'
+                                ? '½ Yarım Gün'
+                                : h.attendance_status === 'Mesai'
+                                ? '⚡ Mesai (1.5x)'
+                                : '✗ Gelmedi'}
                             </span>
                           </td>
 

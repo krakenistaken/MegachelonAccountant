@@ -28,7 +28,7 @@ interface CalendarRecord {
   attendance_id: number;
   employee_id: number;
   date: string;
-  status: 'Geldi' | 'Yarım Gün' | 'Gelmedi';
+  status: 'Geldi' | 'Yarım Gün' | 'Mesai' | 'Gelmedi';
   daily_wage: number;
   is_paid: number;
   paid_amount?: number;
@@ -80,7 +80,7 @@ export default function EmployeeCalendarModal({
 
   // Inline day edit form state
   const [dayForm, setDayForm] = useState<{
-    status: 'Geldi' | 'Yarım Gün' | 'Gelmedi' | 'Boş';
+    status: 'Geldi' | 'Yarım Gün' | 'Mesai' | 'Gelmedi' | 'Boş';
     daily_wage: number;
     payment_mode: 'full' | 'partial' | 'unpaid';
     paid_amount: number;
@@ -147,9 +147,12 @@ export default function EmployeeCalendarModal({
   records.forEach((r) => recordMap.set(r.date, r));
 
   // Monthly stats
-  const workingDays = records.filter((r) => r.status === 'Geldi' || r.status === 'Yarım Gün');
+  const workingDays = records.filter(
+    (r) => r.status === 'Geldi' || r.status === 'Yarım Gün' || r.status === 'Mesai'
+  );
   const fullDays = records.filter((r) => r.status === 'Geldi');
   const halfDays = records.filter((r) => r.status === 'Yarım Gün');
+  const mesaiDays = records.filter((r) => r.status === 'Mesai');
   const absentDays = records.filter((r) => r.status === 'Gelmedi');
 
   const totalEarned = workingDays.reduce((s, r) => s + r.daily_wage, 0);
@@ -225,17 +228,21 @@ export default function EmployeeCalendarModal({
   };
 
   // Quick 1-click update status for a day directly
-  const handleQuickStatusChange = async (dateIso: string, newStatus: 'Geldi' | 'Yarım Gün' | 'Gelmedi' | 'Boş') => {
+  const handleQuickStatusChange = async (
+    dateIso: string,
+    newStatus: 'Geldi' | 'Yarım Gün' | 'Mesai' | 'Gelmedi' | 'Boş'
+  ) => {
     setSavingDay(true);
     try {
       const rec = recordMap.get(dateIso);
       let wage = employee.daily_wage;
       if (newStatus === 'Yarım Gün') wage = employee.daily_wage / 2;
+      else if (newStatus === 'Mesai') wage = employee.daily_wage * 1.5;
 
       let paidAmt = rec?.paid_amount || 0;
       if (newStatus === 'Boş' || newStatus === 'Gelmedi') {
         paidAmt = 0;
-      } else if (newStatus === 'Yarım Gün' && paidAmt > wage) {
+      } else if (paidAmt > wage) {
         paidAmt = wage;
       }
 
@@ -280,7 +287,11 @@ export default function EmployeeCalendarModal({
 
     try {
       let paidAmt = 0;
-      if (dayForm.status === 'Geldi' || dayForm.status === 'Yarım Gün') {
+      if (
+        dayForm.status === 'Geldi' ||
+        dayForm.status === 'Yarım Gün' ||
+        dayForm.status === 'Mesai'
+      ) {
         if (dayForm.payment_mode === 'full') {
           paidAmt = dayForm.daily_wage;
         } else if (dayForm.payment_mode === 'partial') {
@@ -343,7 +354,7 @@ export default function EmployeeCalendarModal({
                 {employee.first_name} {employee.last_name}
               </h3>
               <p className="text-xs text-gray-500 font-medium mt-0.5">
-                Günlük Yevmiye: <span className="font-bold text-gray-800">{formatCurrency(employee.daily_wage)}</span> · Yarım Gün: <span className="font-bold text-indigo-700">{formatCurrency(employee.daily_wage / 2)}</span>
+                Günlük Yevmiye: <span className="font-bold text-gray-800">{formatCurrency(employee.daily_wage)}</span> · Yarım Gün: <span className="font-bold text-indigo-700">{formatCurrency(employee.daily_wage / 2)}</span> · Mesai (1.5x): <span className="font-bold text-purple-700">{formatCurrency(employee.daily_wage * 1.5)}</span>
               </p>
             </div>
           </div>
@@ -386,7 +397,7 @@ export default function EmployeeCalendarModal({
         </div>
 
         {/* Monthly Mini Summary KPI Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-7 gap-2">
           {/* Tam Gün (Yeşil) */}
           <div className="bg-emerald-50 border border-emerald-200/80 rounded-2xl p-3 text-center">
             <div className="flex items-center justify-center gap-1 text-emerald-800 text-[11px] font-bold mb-0.5">
@@ -403,6 +414,15 @@ export default function EmployeeCalendarModal({
               Yarım Gün
             </div>
             <p className="text-lg font-extrabold text-indigo-700">{halfDays.length} Gün</p>
+          </div>
+
+          {/* Mesai (Mor - 1.5x) */}
+          <div className="bg-purple-50 border border-purple-200/80 rounded-2xl p-3 text-center">
+            <div className="flex items-center justify-center gap-1 text-purple-800 text-[11px] font-bold mb-0.5">
+              <span className="w-2 h-2 rounded-full bg-purple-600" />
+              ⚡ Mesai
+            </div>
+            <p className="text-lg font-extrabold text-purple-700">{mesaiDays.length} Gün</p>
           </div>
 
           {/* Tam Ödenen */}
@@ -488,7 +508,8 @@ export default function EmployeeCalendarModal({
 
               const isPresent = record?.status === 'Geldi';
               const isHalfDay = record?.status === 'Yarım Gün';
-              const isWorking = isPresent || isHalfDay;
+              const isMesai = record?.status === 'Mesai';
+              const isWorking = isPresent || isHalfDay || isMesai;
               const paidAmt = record
                 ? record.paid_amount !== undefined
                   ? record.paid_amount
@@ -515,7 +536,13 @@ export default function EmployeeCalendarModal({
                         : ''
                     }
                     ${
-                      isHalfDay && isFullPaid
+                      isMesai && isFullPaid
+                        ? 'bg-purple-600 text-white border-purple-700 shadow-sm shadow-purple-600/20 hover:scale-[1.02]'
+                        : isMesai && isUnpaid
+                        ? 'bg-purple-500 text-white border-purple-600 shadow-sm shadow-purple-500/20 hover:scale-[1.02]'
+                        : isMesai && isPartialPaid
+                        ? 'bg-purple-700 text-white border-purple-800 shadow-sm shadow-purple-700/20 hover:scale-[1.02]'
+                        : isHalfDay && isFullPaid
                         ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm shadow-indigo-600/20 hover:scale-[1.02]'
                         : isHalfDay && isUnpaid
                         ? 'bg-indigo-500 text-white border-indigo-600 shadow-sm shadow-indigo-500/20 hover:scale-[1.02]'
@@ -549,7 +576,16 @@ export default function EmployeeCalendarModal({
 
                   {/* Middle / Bottom: Status badge */}
                   <div className="text-center overflow-hidden">
-                    {isHalfDay ? (
+                    {isMesai ? (
+                      <div className="space-y-0.5">
+                        <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-md text-[10px] font-black bg-white/25 text-white backdrop-blur-xs">
+                          ⚡ Mesai
+                        </span>
+                        <div className="hidden sm:block text-[9px] font-bold text-purple-100 truncate">
+                          ₺{record?.daily_wage} {isFullPaid ? '(Ödendi)' : ''}
+                        </div>
+                      </div>
+                    ) : isHalfDay ? (
                       <div className="space-y-0.5">
                         <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-md text-[10px] font-black bg-white/25 text-white backdrop-blur-xs">
                           ½ Yarım
@@ -635,7 +671,7 @@ export default function EmployeeCalendarModal({
                 <label className="block text-xs font-bold text-gray-700 mb-1.5">
                   Yoklama Durumu:
                 </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                   <button
                     type="button"
                     onClick={() => {
@@ -673,6 +709,26 @@ export default function EmployeeCalendarModal({
                     }`}
                   >
                     ½ Yarım Gün
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const mesaiWage = employee.daily_wage * 1.5;
+                      setDayForm({
+                        ...dayForm,
+                        status: 'Mesai',
+                        daily_wage: mesaiWage,
+                        paid_amount: dayForm.payment_mode === 'full' ? mesaiWage : Math.min(dayForm.paid_amount, mesaiWage),
+                      });
+                    }}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border ${
+                      dayForm.status === 'Mesai'
+                        ? 'bg-purple-600 text-white border-purple-700 shadow-sm'
+                        : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    ⚡ Mesai (1.5x)
                   </button>
 
                   <button
@@ -717,7 +773,7 @@ export default function EmployeeCalendarModal({
               </div>
 
               {/* Wage, Payment & Account Details if not Boş and not Gelmedi */}
-              {(dayForm.status === 'Geldi' || dayForm.status === 'Yarım Gün') && (
+              {(dayForm.status === 'Geldi' || dayForm.status === 'Yarım Gün' || dayForm.status === 'Mesai') && (
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 bg-white rounded-xl border border-gray-200">
                   {/* Daily wage */}
                   <div>
@@ -857,6 +913,10 @@ export default function EmployeeCalendarModal({
             <div className="flex items-center gap-1.5">
               <span className="w-3.5 h-3.5 rounded-md bg-indigo-600 shadow-sm" />
               <span className="text-gray-700">İndigo: Yarım Gün</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-3.5 h-3.5 rounded-md bg-purple-600 shadow-sm" />
+              <span className="text-gray-700">Mor: Mesai (1.5x)</span>
             </div>
             <div className="flex items-center gap-1.5">
               <span className="w-3.5 h-3.5 rounded-md bg-blue-600 shadow-sm" />
