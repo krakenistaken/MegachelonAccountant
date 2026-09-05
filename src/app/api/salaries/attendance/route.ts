@@ -415,6 +415,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, message: 'Yoklama ve ödeme bilgileri güncellendi.' });
   } catch (error) {
     console.error('Attendance POST error:', error);
-    return NextResponse.json({ error: 'Sunucu hatası.' }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Sunucu hatası.' },
+      { status: 500 }
+    );
   }
 }

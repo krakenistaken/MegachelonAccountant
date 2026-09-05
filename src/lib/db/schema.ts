@@ -90,6 +90,45 @@ export async function initializeDatabase(): Promise<void> {
       // Column already exists
     }
 
+    // Auto-migrate attendances table if it contains an old restrictive CHECK constraint on status
+    try {
+      const tableInfo = await db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='attendances'");
+      const sqlDef = String(tableInfo.rows[0]?.sql || '');
+      if (sqlDef && (sqlDef.includes('CHECK(status') || sqlDef.includes('CHECK (status') || (sqlDef.includes('CHECK') && sqlDef.includes('status')))) {
+        console.log('🔄 Migrating attendances table to support Yarım Gün and Mesai...');
+        await db.execute(`
+          CREATE TABLE IF NOT EXISTS attendances_migration_temp (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id    INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+            date           TEXT NOT NULL,
+            status         TEXT NOT NULL DEFAULT 'Geldi',
+            daily_wage     REAL NOT NULL DEFAULT 0,
+            is_paid        INTEGER NOT NULL DEFAULT 0,
+            paid_amount    REAL NOT NULL DEFAULT 0,
+            account_id     INTEGER REFERENCES accounts(id),
+            transaction_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+            note           TEXT,
+            created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(employee_id, date)
+          )
+        `);
+        await db.execute(`
+          INSERT INTO attendances_migration_temp (
+            id, employee_id, date, status, daily_wage, is_paid, paid_amount, account_id, transaction_id, note, created_at, updated_at
+          )
+          SELECT 
+            id, employee_id, date, status, daily_wage, is_paid, COALESCE(paid_amount, 0), account_id, transaction_id, note, created_at, updated_at
+          FROM attendances
+        `);
+        await db.execute(`DROP TABLE attendances`);
+        await db.execute(`ALTER TABLE attendances_migration_temp RENAME TO attendances`);
+        console.log('✅ Attendances table migration completed successfully');
+      }
+    } catch (migErr) {
+      console.error('Attendances migration error:', migErr);
+    }
+
     // Seed default data if tables are empty
     await seedData(db);
   })();
