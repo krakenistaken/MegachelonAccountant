@@ -73,10 +73,33 @@ export default function EmployeeCalendarModal({
   const [records, setRecords] = useState<CalendarRecord[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Selected day for inline editing
+  // Selected day for inline editing (single day)
   const [selectedDayDate, setSelectedDayDate] = useState<string | null>(null);
   const [savingDay, setSavingDay] = useState(false);
   const [daySuccessMessage, setDaySuccessMessage] = useState('');
+
+  // Multi-select mode state
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+  const [selectedDates, setSelectedDates] = useState<string[]>([]);
+  const [batchSuccessMessage, setBatchSuccessMessage] = useState('');
+  const [savingBatch, setSavingBatch] = useState(false);
+
+  // Multi-select batch form state
+  const [batchForm, setBatchForm] = useState<{
+    status: 'Geldi' | 'Yarım Gün' | 'Mesai' | 'Gelmedi' | 'Boş';
+    daily_wage: number;
+    payment_mode: 'full' | 'partial' | 'unpaid';
+    paid_amount: number;
+    account_id: string;
+    note: string;
+  }>({
+    status: 'Geldi',
+    daily_wage: 0,
+    payment_mode: 'unpaid',
+    paid_amount: 0,
+    account_id: '',
+    note: '',
+  });
 
   // Inline day edit form state
   const [dayForm, setDayForm] = useState<{
@@ -112,6 +135,16 @@ export default function EmployeeCalendarModal({
     if (isOpen && employee) {
       fetchCalendar(employee.id, selectedMonth);
       setSelectedDayDate(null);
+      setSelectedDates([]);
+      setIsMultiSelectMode(false);
+      setBatchForm({
+        status: 'Geldi',
+        daily_wage: employee.daily_wage,
+        payment_mode: 'unpaid',
+        paid_amount: 0,
+        account_id: accounts.length > 0 ? String(accounts[0].id) : '',
+        note: '',
+      });
     }
   }, [isOpen, employee, selectedMonth, fetchCalendar]);
 
@@ -124,6 +157,7 @@ export default function EmployeeCalendarModal({
     const newMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
     setSelectedMonth(newMonth);
     setSelectedDayDate(null);
+    setSelectedDates([]);
   };
 
   const handleNextMonth = () => {
@@ -132,6 +166,7 @@ export default function EmployeeCalendarModal({
     const newMonth = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}`;
     setSelectedMonth(newMonth);
     setSelectedDayDate(null);
+    setSelectedDates([]);
   };
 
   // Parse Year and Month
@@ -334,6 +369,87 @@ export default function EmployeeCalendarModal({
     }
   };
 
+  // Toggle date in multi-select mode
+  const handleToggleSelectDate = (dateIso: string) => {
+    setSelectedDates((prev) =>
+      prev.includes(dateIso) ? prev.filter((d) => d !== dateIso) : [...prev, dateIso]
+    );
+  };
+
+  // Select all days of month or deselect
+  const handleSelectAllDays = () => {
+    if (selectedDates.length === daysInMonth) {
+      setSelectedDates([]);
+    } else {
+      const allDays = Array.from({ length: daysInMonth }).map(
+        (_, idx) => `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(idx + 1).padStart(2, '0')}`
+      );
+      setSelectedDates(allDays);
+    }
+  };
+
+  // Save batch form for selected dates
+  const handleSaveBatchForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (selectedDates.length === 0) return;
+    setSavingBatch(true);
+    setBatchSuccessMessage('');
+
+    try {
+      let paidAmt = 0;
+      if (
+        batchForm.status === 'Geldi' ||
+        batchForm.status === 'Yarım Gün' ||
+        batchForm.status === 'Mesai'
+      ) {
+        if (batchForm.payment_mode === 'full') {
+          paidAmt = batchForm.daily_wage;
+        } else if (batchForm.payment_mode === 'partial') {
+          paidAmt = batchForm.paid_amount;
+        }
+      }
+
+      // Execute updates sequentially for each selected date
+      for (const dIso of selectedDates) {
+        const res = await fetch('/api/salaries/attendance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            date: dIso,
+            records: [
+              {
+                employee_id: employee.id,
+                status: batchForm.status === 'Boş' ? null : batchForm.status,
+                daily_wage: batchForm.daily_wage,
+                paid_amount: paidAmt,
+                account_id: paidAmt > 0 && batchForm.account_id ? Number(batchForm.account_id) : null,
+                note: batchForm.note || null,
+              },
+            ],
+          }),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.error || `${dIso} güncellenirken hata oluştu.`);
+        }
+      }
+
+      setBatchSuccessMessage(`${selectedDates.length} gün başarıyla toplu güncellendi.`);
+      await fetchCalendar(employee.id, selectedMonth);
+      if (onAttendanceUpdated) onAttendanceUpdated();
+
+      setSelectedDates([]);
+      setTimeout(() => {
+        setBatchSuccessMessage('');
+      }, 3000);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Toplu güncelleme sırasında hata oluştu.');
+    } finally {
+      setSavingBatch(false);
+    }
+  };
+
   return (
     <Modal
       isOpen={isOpen}
@@ -361,6 +477,36 @@ export default function EmployeeCalendarModal({
 
           {/* Actions & Month Switcher */}
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const nextState = !isMultiSelectMode;
+                setIsMultiSelectMode(nextState);
+                if (nextState) {
+                  setSelectedDayDate(null);
+                  setSelectedDates([]);
+                  setBatchForm({
+                    status: 'Geldi',
+                    daily_wage: employee.daily_wage,
+                    payment_mode: 'unpaid',
+                    paid_amount: 0,
+                    account_id: accounts.length > 0 ? String(accounts[0].id) : '',
+                    note: '',
+                  });
+                } else {
+                  setSelectedDates([]);
+                }
+              }}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shadow-sm ${
+                isMultiSelectMode
+                  ? 'bg-indigo-600 text-white shadow-indigo-500/25 ring-2 ring-indigo-400'
+                  : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-100'
+              }`}
+              title="Birden fazla günü seçerek aynı anda yoklama girin veya güncelleyin"
+            >
+              <span>☑️</span> {isMultiSelectMode ? 'Çoklu Seçimden Çık' : 'Çoklu Seçim (Multi-Select)'}
+            </button>
+
             {onOpenPayDue && (
               <button
                 onClick={() => {
@@ -468,6 +614,41 @@ export default function EmployeeCalendarModal({
 
         {/* Interactive Calendar Grid */}
         <div className="bg-white rounded-2xl border border-gray-200 p-4 shadow-sm relative">
+          {/* Multi-select Header Toolbar if mode is active */}
+          {isMultiSelectMode && (
+            <div className="mb-3 p-3 bg-indigo-50/90 border border-indigo-200 rounded-xl flex flex-wrap items-center justify-between gap-2.5 animate-in fade-in duration-150">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-indigo-600 text-white font-bold text-xs">
+                  {selectedDates.length}
+                </span>
+                <span className="text-xs font-bold text-indigo-950">
+                  {selectedDates.length > 0
+                    ? `${selectedDates.length} gün seçildi — aşağıdaki formdan aynı anda uygulayın`
+                    : 'Düzenlemek istediğiniz günlerin üzerine tıklayın'}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSelectAllDays}
+                  className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 shadow-xs"
+                >
+                  {selectedDates.length === daysInMonth ? 'Tüm Seçimi Kaldır' : 'Tüm Ayı Seç'}
+                </button>
+                {selectedDates.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDates([])}
+                    className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-100 shadow-xs"
+                  >
+                    Seçimi Temizle
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {loading && (
             <div className="absolute inset-0 bg-white/70 backdrop-blur-xs flex items-center justify-center z-20 rounded-2xl">
               <div className="w-8 h-8 border-3 border-primary-200 border-t-primary-600 rounded-full animate-spin" />
@@ -504,7 +685,9 @@ export default function EmployeeCalendarModal({
               const dateIso = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
               const record = recordMap.get(dateIso);
               const isToday = dateIso === todayIso;
-              const isSelected = selectedDayDate === dateIso;
+              const isSelected = isMultiSelectMode
+                ? selectedDates.includes(dateIso)
+                : selectedDayDate === dateIso;
 
               const isPresent = record?.status === 'Geldi';
               const isHalfDay = record?.status === 'Yarım Gün';
@@ -527,11 +710,19 @@ export default function EmployeeCalendarModal({
               return (
                 <div
                   key={dateIso}
-                  onClick={() => handleSelectDay(dateIso)}
+                  onClick={() => {
+                    if (isMultiSelectMode) {
+                      handleToggleSelectDate(dateIso);
+                    } else {
+                      handleSelectDay(dateIso);
+                    }
+                  }}
                   className={`
                     relative h-16 sm:h-20 p-1.5 rounded-xl border transition-all duration-200 flex flex-col justify-between cursor-pointer group
                     ${
-                      isSelected
+                      isSelected && isMultiSelectMode
+                        ? 'ring-4 ring-indigo-500 ring-offset-2 scale-[1.03] z-10 shadow-lg'
+                        : isSelected
                         ? 'ring-3 ring-primary-600 ring-offset-2 scale-[1.03] z-10'
                         : ''
                     }
@@ -558,9 +749,9 @@ export default function EmployeeCalendarModal({
                     }
                     ${isToday ? 'border-2 border-primary-500' : ''}
                   `}
-                  title={`${dayNum} ${monthTitle} - Tıklayarak yoklamasını düzenleyin`}
+                  title={`${dayNum} ${monthTitle} - ${isMultiSelectMode ? 'Seçmek/kaldırmak için tıklayın' : 'Tıklayarak yoklamasını düzenleyin'}`}
                 >
-                  {/* Top: Day Number & Indicator */}
+                  {/* Top: Day Number & Multi-select Checkbox / Indicator */}
                   <div className="flex items-center justify-between">
                     <span
                       className={`text-xs sm:text-sm font-extrabold ${
@@ -569,8 +760,20 @@ export default function EmployeeCalendarModal({
                     >
                       {dayNum}
                     </span>
-                    {isToday && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-primary-400 animate-pulse" />
+                    {isMultiSelectMode ? (
+                      <div
+                        className={`w-4 h-4 rounded-md flex items-center justify-center border transition-colors ${
+                          isSelected
+                            ? 'bg-indigo-600 border-indigo-600 text-white font-black text-[10px]'
+                            : 'border-gray-400 bg-white/70'
+                        }`}
+                      >
+                        {isSelected && '✓'}
+                      </div>
+                    ) : (
+                      isToday && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-primary-400 animate-pulse" />
+                      )
                     )}
                   </div>
 
@@ -637,8 +840,305 @@ export default function EmployeeCalendarModal({
           </div>
         </div>
 
+        {/* Multi-Select Batch Control Panel */}
+        {isMultiSelectMode && (
+          <div className="p-4 sm:p-5 bg-gradient-to-br from-indigo-50/70 via-white to-purple-50/40 rounded-2xl border-2 border-indigo-400 shadow-lg animate-in fade-in slide-in-from-bottom-3 duration-200">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-indigo-100">
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white font-black text-xs">
+                  ☑️ Çoklu Düzenleme ({selectedDates.length} Gün Seçili)
+                </span>
+                <h4 className="font-bold text-gray-900 text-sm">
+                  {selectedDates.length > 0
+                    ? `Seçilen ${selectedDates.length} Gün İçin Ortak Yoklama / Ücret Belirleyin`
+                    : 'Takvimden düzenlemek istediğiniz günleri seçin'}
+                </h4>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMultiSelectMode(false);
+                  setSelectedDates([]);
+                }}
+                className="text-xs font-semibold text-gray-400 hover:text-gray-700"
+              >
+                ✕ Modu Kapat
+              </button>
+            </div>
+
+            {batchSuccessMessage && (
+              <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2">
+                ✓ {batchSuccessMessage}
+              </div>
+            )}
+
+            {selectedDates.length > 0 ? (
+              <form onSubmit={handleSaveBatchForm} className="space-y-4">
+                {/* Selected days chip display */}
+                <div className="flex flex-wrap items-center gap-1.5 p-2 bg-indigo-50/50 rounded-xl border border-indigo-100 max-h-24 overflow-y-auto">
+                  <span className="text-[11px] font-bold text-indigo-900 mr-1">Seçili Günler:</span>
+                  {selectedDates
+                    .slice()
+                    .sort()
+                    .map((d) => (
+                      <span
+                        key={d}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-white border border-indigo-200 text-indigo-800 shadow-xs"
+                      >
+                        {d.slice(8)} {MONTH_NAMES[parseInt(d.slice(5, 7), 10) - 1]}
+                        <button
+                          type="button"
+                          onClick={() => handleToggleSelectDate(d)}
+                          className="text-gray-400 hover:text-rose-500 font-bold ml-0.5"
+                          title="Seçimi Kaldır"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                </div>
+
+                {/* Status Selector */}
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                    Toplu Uygulanacak Yoklama Durumu:
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBatchForm({
+                          ...batchForm,
+                          status: 'Geldi',
+                          daily_wage: employee.daily_wage,
+                          paid_amount: batchForm.payment_mode === 'full' ? employee.daily_wage : batchForm.paid_amount,
+                        });
+                      }}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border ${
+                        batchForm.status === 'Geldi'
+                          ? 'bg-emerald-600 text-white border-emerald-700 shadow-sm'
+                          : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      ✓ Tam Gün (Geldi)
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const halfWage = employee.daily_wage / 2;
+                        setBatchForm({
+                          ...batchForm,
+                          status: 'Yarım Gün',
+                          daily_wage: halfWage,
+                          paid_amount: batchForm.payment_mode === 'full' ? halfWage : Math.min(batchForm.paid_amount, halfWage),
+                        });
+                      }}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border ${
+                        batchForm.status === 'Yarım Gün'
+                          ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm'
+                          : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      ½ Yarım Gün
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const mesaiWage = employee.daily_wage * 1.5;
+                        setBatchForm({
+                          ...batchForm,
+                          status: 'Mesai',
+                          daily_wage: mesaiWage,
+                          paid_amount: batchForm.payment_mode === 'full' ? mesaiWage : Math.min(batchForm.paid_amount, mesaiWage),
+                        });
+                      }}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border ${
+                        batchForm.status === 'Mesai'
+                          ? 'bg-purple-600 text-white border-purple-700 shadow-sm'
+                          : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      ⚡ Mesai (1.5x)
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBatchForm({
+                          ...batchForm,
+                          status: 'Gelmedi',
+                          paid_amount: 0,
+                          payment_mode: 'unpaid',
+                        });
+                      }}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border ${
+                        batchForm.status === 'Gelmedi'
+                          ? 'bg-rose-600 text-white border-rose-700 shadow-sm'
+                          : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      ✗ Gelmedi (Devamsız)
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBatchForm({
+                          ...batchForm,
+                          status: 'Boş',
+                          paid_amount: 0,
+                          payment_mode: 'unpaid',
+                        });
+                      }}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border ${
+                        batchForm.status === 'Boş'
+                          ? 'bg-gray-800 text-white border-gray-900 shadow-sm'
+                          : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                      }`}
+                      title="Seçili günlerin kaydını tamamen sil / boşalt"
+                    >
+                      🗑️ Yoklama Yok (Boş)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Wage & Payment info if working status */}
+                {(batchForm.status === 'Geldi' || batchForm.status === 'Yarım Gün' || batchForm.status === 'Mesai') && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 bg-white rounded-xl border border-gray-200">
+                    <div>
+                      <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                        Günlük Yevmiye Tutarı (Her Bir Gün İçin ₺)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        required
+                        value={batchForm.daily_wage}
+                        onChange={(e) => {
+                          const w = parseFloat(e.target.value) || 0;
+                          setBatchForm({
+                            ...batchForm,
+                            daily_wage: w,
+                            paid_amount: batchForm.payment_mode === 'full' ? w : batchForm.paid_amount,
+                          });
+                        }}
+                        className="w-full px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-bold text-gray-900 bg-gray-50"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                        Ödeme Durumu
+                      </label>
+                      <select
+                        value={batchForm.payment_mode}
+                        onChange={(e) => {
+                          const m = e.target.value as 'full' | 'partial' | 'unpaid';
+                          setBatchForm({
+                            ...batchForm,
+                            payment_mode: m,
+                            paid_amount: m === 'full' ? batchForm.daily_wage : m === 'partial' ? Math.round(batchForm.daily_wage / 2) : 0,
+                          });
+                        }}
+                        className="w-full px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-900 bg-gray-50"
+                      >
+                        <option value="unpaid">✗ Ödenmedi (Borç Yaz)</option>
+                        <option value="full">✓ Tam Ödendi ({formatCurrency(batchForm.daily_wage)} / gün)</option>
+                        <option value="partial">⚡ Kısmi Ödeme (Gün başına)</option>
+                      </select>
+                    </div>
+
+                    {batchForm.payment_mode !== 'unpaid' ? (
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                          Ödenecek Kasa
+                        </label>
+                        <select
+                          value={batchForm.account_id}
+                          onChange={(e) => setBatchForm({ ...batchForm, account_id: e.target.value })}
+                          className="w-full px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-900 bg-gray-50"
+                        >
+                          <option value="">— Harici / Elden —</option>
+                          {accounts.map((acc) => (
+                            <option key={acc.id} value={acc.id}>
+                              {acc.name} ({formatCurrency(acc.balance)})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-400 mb-1">
+                          Toplam Kalan Borç
+                        </label>
+                        <div className="px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 font-extrabold text-xs">
+                          +{formatCurrency(batchForm.daily_wage * selectedDates.length)} ({selectedDates.length} gün)
+                        </div>
+                      </div>
+                    )}
+
+                    {batchForm.payment_mode === 'partial' && (
+                      <div className="col-span-full flex items-center gap-2 p-2 bg-blue-50 rounded-lg border border-blue-200">
+                        <span className="text-xs font-bold text-blue-900">Gün Başına Ödenen:</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max={batchForm.daily_wage}
+                          step="any"
+                          value={batchForm.paid_amount}
+                          onChange={(e) => setBatchForm({ ...batchForm, paid_amount: parseFloat(e.target.value) || 0 })}
+                          className="w-24 px-2 py-1 text-xs font-bold text-gray-900 bg-white border border-blue-300 rounded-lg"
+                        />
+                        <span className="text-xs text-amber-800 font-bold">
+                          (Seçili {selectedDates.length} gün için toplam ödeme: {formatCurrency(batchForm.paid_amount * selectedDates.length)})
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Note and Actions */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+                  <input
+                    type="text"
+                    placeholder="Seçili günlerin tümüne ortak not ekle (isteğe bağlı)..."
+                    value={batchForm.note}
+                    onChange={(e) => setBatchForm({ ...batchForm, note: e.target.value })}
+                    className="flex-1 px-3 py-2 rounded-xl border border-gray-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDates([])}
+                      className="px-4 py-2 rounded-xl text-xs font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200"
+                    >
+                      Seçimi Sıfırla
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingBatch}
+                      className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/25 disabled:opacity-50"
+                    >
+                      {savingBatch ? `Kaydediliyor (${selectedDates.length} Gün)...` : `Seçilen ${selectedDates.length} Günü Güncelle`}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            ) : (
+              <div className="py-6 text-center text-xs text-gray-500 font-medium bg-white/60 rounded-xl border border-dashed border-gray-300">
+                👆 Yukarıdaki takvimden düzenlemek istediğiniz günlerin kutularına tıklayın (örneğin 5-10 gün seçin).
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Selected Day Control Panel (Inline Editor) */}
-        {selectedDayDate && (
+        {!isMultiSelectMode && selectedDayDate && (
           <div className="p-4 sm:p-5 bg-gradient-to-br from-primary-50/50 via-white to-gray-50 rounded-2xl border-2 border-primary-300 shadow-md animate-in fade-in slide-in-from-bottom-3 duration-200">
             <div className="flex items-center justify-between pb-3 mb-4 border-b border-primary-100">
               <div className="flex items-center gap-2">
